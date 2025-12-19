@@ -1,0 +1,12 @@
+#normal traffic
+curl http://localhost:8000/work
+
+#latency incident
+curl -X POST http://localhost:8000/chaos \
+  -H "Content-Type: application/json" \
+  -d '{"mode": "slow"}'
+
+#error incident
+curl -X POST http://localhost:8000/chaos \
+  -H "Content-Type: application/json" \
+  -d '{"mode": "error"}'
