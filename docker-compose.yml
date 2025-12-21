@@ -50,6 +50,8 @@ services:
     container_name: incident-command-backend
     ports:
       - "8080:8080"
+    env_file:
+      - .env
     networks:
       - dd_net
 networks:

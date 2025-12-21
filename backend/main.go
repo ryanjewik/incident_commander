@@ -2,13 +2,15 @@ package main
 
 import (
 	"github.com/gin-gonic/gin"
+	"github.com/ryanjewik/incident_commander/backend/config"
 	"github.com/ryanjewik/incident_commander/backend/handlers"
 	"github.com/ryanjewik/incident_commander/backend/router"
 )
 
 func main() {
+	cfg := config.Load()
 
-	app := handlers.NewApp()
+	app := handlers.NewApp(cfg)
 
 	r := gin.Default() // Creates a router with default middleware (logger and recovery)
 
