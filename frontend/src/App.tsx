@@ -2,8 +2,8 @@ import { useState } from 'react'
 import reactLogo from './assets/react.svg'
 import viteLogo from '/vite.svg'
 import './App.css'
-import DashboardSection from './DashboardSection'
-import IncidentList from './IncidentList'
+import MainContent from './components/MainContent'
+import IncidentList from './components/IncidentList'
 
 function App() {
 
@@ -34,14 +34,14 @@ function App() {
           Incident Command Center
         </h2>
       </div>
-      <div className="pt-50 text-left relative left-1/2 right-1/2 -mx-[50vw] w-screen h-280 px-2">
+      <div className="pt-45 text-left relative left-1/2 right-1/2 -mx-[50vw] w-screen h-425 px-2">
         <div className='flex'>
           <IncidentList
             incidentData={incidentData}
             selectedIncident={selectedIncident}
             onSelectIncident={setSelectedIncident}
           />
-          <DashboardSection 
+          <MainContent 
             selectedIncident={selectedIncident}
             incidentData={incidentData}
             onClose={() => setSelectedIncident(null)}

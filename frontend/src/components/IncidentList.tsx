@@ -26,7 +26,7 @@ function IncidentList({ incidentData, selectedIncident, onSelectIncident }: Inci
   });
 
   return (
-    <div className='w-1/5 p-4 bg-purple-100 border-3 border-purple-700 shadow-lg h-280 ml-2 overflow-y-auto'>
+    <div className='w-1/5 p-4 bg-purple-100 border-3 border-purple-700 shadow-lg h-384 ml-2 overflow-y-auto'>
       <h3 className='text-2xl font-semibold mb-2'>Incidents & Queries</h3>
       
       <div className='mb-4 space-y-2'>
