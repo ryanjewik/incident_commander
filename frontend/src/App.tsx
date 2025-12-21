@@ -9,7 +9,7 @@ function App() {
 
   const [selectedIncident, setSelectedIncident] = useState<number | null>(null);
 
-  const [incidentData] = useState([
+  const [incidentData, setIncidentData] = useState([
     { id: 1, title: 'Network Outage', status: 'Active', date: '2025-06-01T14:32:15', type: 'Incident Report', description: 'Multiple reports of network connectivity issues affecting the east coast data center. Primary and backup routers are experiencing intermittent failures.' },
     { id: 2, title: 'Database Latency', status: 'Ignored', date: '2024-11-02T09:15:42', type: 'NL Query', description: 'Increased query response times observed on the production database. Average latency has risen from 50ms to 250ms over the past hour.' },
     { id: 3, title: 'Service Degradation', status: 'Active', date: '2025-03-03T18:45:30', type: 'NL Query', description: 'API response times are 3x slower than baseline. Users reporting timeout errors when accessing the dashboard.' },
@@ -26,6 +26,16 @@ function App() {
     { id: 14, title: 'Authentication Service Timeout', status: 'Active', date: '2025-05-28T19:47:51', type: 'Incident Report', description: 'OAuth authentication service experiencing timeout errors. Users unable to log in. Backend team investigating database connection pool exhaustion.' },
     { id: 15, title: 'CDN Performance Issues', status: 'Resolved', date: '2024-09-11T12:25:09', type: 'NL Query', description: 'CDN edge nodes reporting degraded performance in Asia-Pacific region. Issue resolved after cache purge and configuration update.' },
   ]);
+
+  const handleStatusChange = (incidentId: number, newStatus: string) => {
+    setIncidentData(prevData => 
+      prevData.map(incident => 
+        incident.id === incidentId 
+          ? { ...incident, status: newStatus }
+          : incident
+      )
+    );
+  };
 
   return (
     <>
@@ -45,6 +55,7 @@ function App() {
             selectedIncident={selectedIncident}
             incidentData={incidentData}
             onClose={() => setSelectedIncident(null)}
+            onStatusChange={handleStatusChange}
           />
         </div>
       </div>

@@ -14,9 +14,10 @@ interface DashboardSectionProps {
   selectedIncident: number | null;
   incidentData: Incident[];
   onClose: () => void;
+  onStatusChange: (incidentId: number, newStatus: string) => void;
 }
 
-function MainContent({ selectedIncident, incidentData, onClose }: DashboardSectionProps) {
+function MainContent({ selectedIncident, incidentData, onClose, onStatusChange }: DashboardSectionProps) {
   const [queryText, setQueryText] = useState('');
   const [isRecording, setIsRecording] = useState(false);
   const recognitionRef = useRef<any>(null);
@@ -95,12 +96,24 @@ function MainContent({ selectedIncident, incidentData, onClose }: DashboardSecti
             <div>
               <div className='flex items-center justify-between mb-4'>
                 <h3 className='text-3xl font-bold'>{incident.title}</h3>
-                <button 
-                  onClick={onClose}
-                  className='px-4 py-2 bg-gray-500 text-white rounded hover:bg-gray-600'
-                >
-                  Close
-                </button>
+                <div className='flex gap-2'>
+                  <select
+                    value={incident.status}
+                    onChange={(e) => onStatusChange(incident.id, e.target.value)}
+                    className='px-4 py-2 border-3 border-purple-600 rounded font-semibold bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-purple-600'
+                  >
+                    <option value='New'>New</option>
+                    <option value='Active'>Active</option>
+                    <option value='Resolved'>Resolved</option>
+                    <option value='Ignored'>Ignored</option>
+                  </select>
+                  <button 
+                    onClick={onClose}
+                    className='px-4 py-2 bg-gray-500 text-white rounded hover:bg-gray-600'
+                  >
+                    Close
+                  </button>
+                </div>
               </div>
               <div className='mb-4 flex gap-2 flex-wrap'>
                 <span className={`px-3 py-2 rounded-sm text-sm font-semibold ${
