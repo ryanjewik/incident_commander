@@ -34,6 +34,15 @@ services:
       - datadog
     networks:
       - dd_net
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: incident-command-frontend
+    ports:
+      - "3000:80"
+    networks:
+      - dd_net
 networks:
   dd_net:
     driver: bridge
