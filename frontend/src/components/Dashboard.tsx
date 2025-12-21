@@ -7,7 +7,7 @@ import PerformanceMetrics from './dashboard_dummies/PerformanceMetrics';
 
 function Dashboard(){
     return (    
-        <div className="bg-gradient-to-br from-purple-50 to-pink-50 h-347 w-full p-6 overflow-y-auto">
+        <div className="bg-gradient-to-br from-purple-50 to-pink-50 h-346.5 w-full p-6 overflow-y-auto">
             <h2 className="text-3xl font-bold text-purple-700 mb-6">Dashboard Overview</h2>
             
             <div className="space-y-6">

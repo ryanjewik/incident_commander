@@ -54,3 +54,20 @@ htmlcov/
 
 node_modules/
 npm-debug.log*
+
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Output directories
+/bin/
+/obj/
+/pkg/
+
+# IDE/editor files
+.vscode/
+.idea/
+*.swp

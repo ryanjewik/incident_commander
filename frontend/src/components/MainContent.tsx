@@ -87,7 +87,7 @@ function MainContent({ selectedIncident, incidentData, onClose, onStatusChange }
   };
 
   return (
-    <div className='w-4/5 p-4 bg-pink-100 border-3 border-pink-700 shadow-lg h-full mx-2 overflow-y-auto'>
+    <div className='w-4/5 p-4 bg-pink-100 border-3 border-purple-700 shadow-lg h-full mx-2 overflow-y-auto'>
       {selectedIncident ? (
         (() => {
           const incident = incidentData.find(i => i.id === selectedIncident);

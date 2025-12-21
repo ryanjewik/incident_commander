@@ -43,6 +43,15 @@ services:
       - "3000:80"
     networks:
       - dd_net
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: incident-command-backend
+    ports:
+      - "8080:8080"
+    networks:
+      - dd_net
 networks:
   dd_net:
     driver: bridge
