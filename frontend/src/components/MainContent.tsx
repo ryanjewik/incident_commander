@@ -1,5 +1,4 @@
 import { useState, useRef } from 'react';
-import Dashboard from './Dashboard';
 
 interface Incident {
   id: number;
@@ -184,7 +183,9 @@ function MainContent({ selectedIncident, incidentData, onClose, onStatusChange }
         })()
       ) : (
         <div className='flex flex-col items-center justify-between h-full'>
-          <Dashboard />
+          <div className='flex-1 flex items-center justify-center'>
+            <p className='text-gray-600 text-lg'>Select an incident to view details</p>
+          </div>
           <div className='w-full bg-gradient-to-r from-purple-500 to-pink-500 p-6 rounded-md'>
             <div className='flex gap-4 items-center'>
               <button

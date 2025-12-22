@@ -2,19 +2,20 @@ package main
 
 import (
 	"github.com/gin-gonic/gin"
+	"github.com/joho/godotenv"
+
 	"github.com/ryanjewik/incident_commander/backend/config"
 	"github.com/ryanjewik/incident_commander/backend/handlers"
 	"github.com/ryanjewik/incident_commander/backend/router"
+	"github.com/ryanjewik/incident_commander/backend/services"
 
 	//confluent test
 	"bufio"
 	"fmt"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
-	"github.com/gin-contrib/cors"
 )
 
 func ReadConfig() kafka.ConfigMap {
@@ -109,6 +110,8 @@ func consume(topic string, config kafka.ConfigMap) {
 }
 
 func main() {
+	_ = godotenv.Load()
+
 	topic := "topic_0"
 	kafkaconfig := ReadConfig()
 
@@ -119,21 +122,19 @@ func main() {
 
 	cfg := config.Load()
 
+	firebaseService, err := services.NewFirebaseService(cfg.FirebaseCredentialsPath)
+	if err != nil {
+		panic(err)
+	}
+	defer firebaseService.Close()
+
+	userService := services.NewUserService(firebaseService)
+
 	app := handlers.NewApp(cfg)
 
 	r := gin.Default() // Creates a router with default middleware (logger and recovery)
 
-	// Add CORS middleware
-	r.Use(cors.New(cors.Config{
-		AllowOrigins:     []string{"http://localhost:3000"},
-		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
-		AllowHeaders:     []string{"Origin", "Content-Type", "Accept", "Authorization"},
-		ExposeHeaders:    []string{"Content-Length"},
-		AllowCredentials: true,
-		MaxAge:           12 * time.Hour,
-	}))
+	router.Register(r, app, userService)
 
-	router.Register(r, app)
-
-	r.Run(":8080") // Listen and serve on port 8080
+	r.Run(":" + cfg.Port) // Listen and serve on port 8080
 }
