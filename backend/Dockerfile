@@ -29,8 +29,12 @@ RUN apk add --no-cache librdkafka
 # Copy the binary from builder
 COPY --from=builder /app/main .
 
-# Copy the client.properties file
-COPY client.properties .
+# Copy the client.properties file from builder
+COPY --from=builder /app/client.properties .
+
+# Create backend directory and copy firebase credentials from builder
+RUN mkdir -p backend
+COPY --from=builder /app/firebase-service-account.json ./backend/
 
 EXPOSE 8080
 

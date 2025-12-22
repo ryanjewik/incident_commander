@@ -2,7 +2,6 @@ package main
 
 import (
 	"github.com/gin-gonic/gin"
-	"github.com/joho/godotenv"
 
 	"github.com/ryanjewik/incident_commander/backend/config"
 	"github.com/ryanjewik/incident_commander/backend/handlers"
@@ -110,7 +109,6 @@ func consume(topic string, config kafka.ConfigMap) {
 }
 
 func main() {
-	_ = godotenv.Load()
 
 	topic := "topic_0"
 	kafkaconfig := ReadConfig()

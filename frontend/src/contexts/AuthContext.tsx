@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useState, useCallback, useMemo } from 'react';
 import type { ReactNode } from 'react';
-import { onAuthStateChanged, signInWithEmailAndPassword, signOut as firebaseSignOut } from 'firebase/auth';
+import { onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut as firebaseSignOut } from 'firebase/auth';
 import type { User as FirebaseUser } from 'firebase/auth';
 import { auth } from '../config/firebase';
 import { apiService } from '../services/api';
@@ -12,6 +12,7 @@ interface AuthContextType {
   organization: Organization | null;
   loading: boolean;
   signIn: (email: string, password: string) => Promise<void>;
+  signUp: (email: string, password: string) => Promise<void>;
   signOut: () => Promise<void>;
   createOrganization: (name: string) => Promise<Organization>;
   addMember: (email: string, role: string) => Promise<void>;
@@ -26,7 +27,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [organization, setOrganization] = useState<Organization | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const fetchUserData = useCallback(async (user: FirebaseUser) => {
+  const fetchUserData = useCallback(async () => {
     try {
       await new Promise(resolve => setTimeout(resolve, 100));
       
@@ -55,7 +56,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       
       try {
         if (user) {
-          await fetchUserData(user);
+          await fetchUserData();
         } else {
           setUserData(null);
           setOrganization(null);
@@ -72,6 +73,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await signInWithEmailAndPassword(auth, email, password);
   }, []);
 
+  const signUp = useCallback(async (email: string, password: string) => {
+    await createUserWithEmailAndPassword(auth, email, password);
+  }, []);
+
   const signOut = useCallback(async () => {
     await firebaseSignOut(auth);
   }, []);
@@ -80,7 +85,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const org = await apiService.createOrganization(name);
     setOrganization(org);
     if (firebaseUser) {
-      await fetchUserData(firebaseUser);
+      await fetchUserData();
     }
     return org;
   }, [firebaseUser, fetchUserData]);
@@ -91,7 +96,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const refreshUserData = useCallback(async () => {
     if (firebaseUser) {
-      await fetchUserData(firebaseUser);
+      await fetchUserData();
     }
   }, [firebaseUser, fetchUserData]);
 
@@ -101,11 +106,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     organization, 
     loading, 
     signIn, 
+    signUp,
     signOut,
     createOrganization,
     addMember,
     refreshUserData
-  }), [firebaseUser, userData, organization, loading, signIn, signOut, createOrganization, addMember, refreshUserData]);
+  }), [firebaseUser, userData, organization, loading, signIn, signUp, signOut, createOrganization, addMember, refreshUserData]);
 
   return (
     <AuthContext.Provider value={contextValue}>
