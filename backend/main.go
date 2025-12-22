@@ -110,8 +110,10 @@ func main() {
 	topic := "topic_0"
 	kafkaconfig := ReadConfig()
 
-	produce(topic, kafkaconfig)
-	consume(topic, kafkaconfig)
+	go produce(topic, kafkaconfig)
+
+	// Run consumer in a goroutine so it doesn't block the server
+	go consume(topic, kafkaconfig)
 
 	cfg := config.Load()
 
