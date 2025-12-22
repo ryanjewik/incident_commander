@@ -11,7 +11,7 @@ func ContainsAny(mainString string, list []string) bool {
 	return false
 }
 
-func IntentRouter(query string, incidentId string) string {
+func IntentRouter(query string, incidentId string) (string, []string) {
 	var intent string
 	var agents []string
 
@@ -36,5 +36,5 @@ func IntentRouter(query string, incidentId string) string {
 		intent = "status_query"
 	}
 
-	return intent
+	return intent, agents
 }

@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/ryanjewik/incident_commander/backend/services"
@@ -32,12 +33,12 @@ func (a *App) NLQuery(c *gin.Context) {
 		return
 	}
 
-	intent := services.IntentRouter(req.Message, req.IncidentId)
+	intent, agents := services.IntentRouter(req.Message, req.IncidentId)
 
 	// TODO: Process the message with your NL query logic
 	// For now, echo back the message
 	response := NLQueryResponse{
-		Response: "Intent detected: " + intent,
+		Response: "Intent detected: " + intent + ", Original message: " + req.Message + ", Agents: " + strings.Join(agents, ", "),
 		Success:  true,
 	}
 
