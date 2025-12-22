@@ -72,4 +72,9 @@ npm-debug.log*
 .idea/
 *.swp
 
-client.properties
+client.properties 
+
+
+firebase-service-account.json
+.env
+*.log
