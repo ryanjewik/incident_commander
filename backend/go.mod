@@ -2,7 +2,10 @@ module github.com/ryanjewik/incident_commander/backend
 
 go 1.25.3
 
-require github.com/gin-gonic/gin v1.11.0
+require (
+	github.com/confluentinc/confluent-kafka-go/v2 v2.12.0
+	github.com/gin-gonic/gin v1.11.0
+)
 
 require (
 	github.com/bytedance/gopkg v0.1.3 // indirect

@@ -71,3 +71,5 @@ npm-debug.log*
 .vscode/
 .idea/
 *.swp
+
+client.properties

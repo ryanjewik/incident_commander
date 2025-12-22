@@ -50,6 +50,9 @@ services:
     container_name: incident-command-backend
     ports:
       - "8080:8080"
+    environment:
+      - CGO_ENABLED=1
+      - PKG_CONFIG_PATH=/usr/lib/pkgconfig
     env_file:
       - .env
     networks:
