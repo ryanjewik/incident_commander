@@ -1,61 +1,43 @@
 import { useState } from 'react';
 import type { FormEvent } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
-import { apiService } from '../services/api';
-import { useAuth } from '../contexts/AuthContext';
+import { useNavigate } from 'react-router-dom';
+import { useAuth } from '../../contexts/AuthContext';
 
-export default function Signup() {
+interface SignupProps {
+  onSwitchToLogin?: () => void;
+}
+
+export default function Signup({ onSwitchToLogin }: SignupProps) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [displayName, setDisplayName] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
-  const { signIn } = useAuth();
+  const { signUp } = useAuth();
   const navigate = useNavigate();
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
-    console.log('[Signup] Form submitted');
+    
+    if (password !== confirmPassword) {
+      return setError('Passwords do not match');
+    }
+
     setError('');
     setLoading(true);
 
     try {
-      console.log('[Signup] Starting signup process for:', email);
-      
-      console.log('[Signup] Creating user via API');
-      const user = await apiService.createUser(email, password, displayName);
-      console.log('[Signup] User created successfully:', user);
-      
-      console.log('[Signup] Waiting 1000ms before sign in');
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      
-      console.log('[Signup] Calling signIn');
-      await signIn(email, password);
-      console.log('[Signup] SignIn completed successfully');
-      
-      // Additional wait to ensure auth state is fully propagated
-      console.log('[Signup] Waiting 500ms before navigation');
-      await new Promise(resolve => setTimeout(resolve, 500));
-      
-      console.log('[Signup] Navigating to /');
-      navigate('/', { replace: true });
-      console.log('[Signup] Navigation called');
+      await signUp(email, password);
+      navigate('/');
     } catch (err: any) {
-      console.error('[Signup] Error during signup:', err);
-      console.error('[Signup] Error details:', {
-        response: err.response?.data,
-        message: err.message,
-        stack: err.stack
-      });
-      setError(err.response?.data?.error || err.message || 'Failed to create account');
+      setError(err.message || 'Failed to create account');
     } finally {
-      console.log('[Signup] Setting loading to false');
       setLoading(false);
     }
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-purple-900 to-pink-900">
+    <div className="h-full w-full flex items-center justify-center bg-gradient-to-br from-purple-900 to-pink-900">
       <div className="bg-white p-8 rounded-lg shadow-2xl w-96">
         <h2 className="text-3xl font-bold text-center mb-6 text-gray-800">
           Create Account
@@ -68,19 +50,6 @@ export default function Signup() {
         )}
 
         <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Display Name
-            </label>
-            <input
-              type="text"
-              value={displayName}
-              onChange={(e) => setDisplayName(e.target.value)}
-              required
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
-            />
-          </div>
-
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
               Email
@@ -103,7 +72,19 @@ export default function Signup() {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               required
-              minLength={6}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Confirm Password
+            </label>
+            <input
+              type="password"
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+              required
               className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
             />
           </div>
@@ -119,9 +100,12 @@ export default function Signup() {
 
         <p className="mt-4 text-center text-sm text-gray-600">
           Already have an account?{' '}
-          <Link to="/login" className="text-purple-600 hover:text-purple-800 font-medium">
+          <button
+            onClick={onSwitchToLogin}
+            className="text-purple-600 hover:text-purple-800 font-medium"
+          >
             Sign in
-          </Link>
+          </button>
         </p>
       </div>
     </div>

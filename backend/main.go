@@ -1,13 +1,11 @@
 package main
 
 import (
-	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
 
 	"github.com/ryanjewik/incident_commander/backend/config"
 	"github.com/ryanjewik/incident_commander/backend/handlers"
-	"github.com/ryanjewik/incident_commander/backend/middleware"
 	"github.com/ryanjewik/incident_commander/backend/router"
 	"github.com/ryanjewik/incident_commander/backend/services"
 
@@ -124,51 +122,19 @@ func main() {
 
 	cfg := config.Load()
 
-	app := handlers.NewApp(cfg)
-
-	r := gin.Default() // Creates a router with default middleware (logger and recovery)
-
-	credentialsPath := os.Getenv("FIREBASE_CREDENTIALS_PATH")
-	firebaseService, err := services.NewFirebaseService(credentialsPath)
+	firebaseService, err := services.NewFirebaseService(cfg.FirebaseCredentialsPath)
 	if err != nil {
 		panic(err)
 	}
 	defer firebaseService.Close()
 
 	userService := services.NewUserService(firebaseService)
-	authHandler := handlers.NewAuthHandler(userService)
 
-	r.Use(cors.New(cors.Config{
-		AllowOrigins:     []string{"http://localhost:5173"},
-		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
-		AllowHeaders:     []string{"Origin", "Content-Type", "Authorization"},
-		ExposeHeaders:    []string{"Content-Length"},
-		AllowCredentials: true,
-	}))
+	app := handlers.NewApp(cfg)
 
-	router.Register(r, app)
+	r := gin.Default() // Creates a router with default middleware (logger and recovery)
 
-	r.GET("/", func(c *gin.Context) {
-		c.JSON(200, gin.H{
-			"message": "Hello, Gin!",
-		})
-	})
+	router.Register(r, app, userService)
 
-	//public routes don't need auth
-	public := r.Group("/api/auth")
-	{
-		public.POST("/users", authHandler.CreateUser)
-	}
-
-	//protected routes need auth
-	protected := r.Group("/api/auth")
-	protected.Use(middleware.AuthMiddleware(userService))
-	{
-		protected.GET("/me", authHandler.GetMe)
-		protected.POST("/organizations", authHandler.CreateOrganization)
-		protected.GET("/users", authHandler.GetOrgUsers)
-		protected.POST("/organizations/members", authHandler.AddMember)
-	}
-
-	r.Run(":8080") // Listen and serve on port 8080
+	r.Run(":" + cfg.Port) // Listen and serve on port 8080
 }

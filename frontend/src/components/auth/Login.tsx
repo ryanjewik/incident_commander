@@ -1,9 +1,14 @@
 import { useState } from 'react';
 import type { FormEvent } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
-import { useAuth } from '../contexts/AuthContext';
+import { useNavigate } from 'react-router-dom';
+import { useAuth } from '../../contexts/AuthContext';
 
-export default function Login() {
+
+interface LoginProps {
+  onSwitchToSignup?: () => void;
+}
+
+export default function Login({ onSwitchToSignup }: LoginProps) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
@@ -27,7 +32,7 @@ export default function Login() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-purple-900 to-pink-900">
+    <div className="h-full w-full flex items-center justify-center bg-gradient-to-br from-purple-900 to-pink-900">
       <div className="bg-white p-8 rounded-lg shadow-2xl w-96">
         <h2 className="text-3xl font-bold text-center mb-6 text-gray-800">
           Incident Command Center
@@ -77,9 +82,12 @@ export default function Login() {
 
         <p className="mt-4 text-center text-sm text-gray-600">
           Don't have an account?{' '}
-          <Link to="/signup" className="text-purple-600 hover:text-purple-800 font-medium">
+          <button
+            onClick={onSwitchToSignup}
+            className="text-purple-600 hover:text-purple-800 font-medium"
+          >
             Sign up
-          </Link>
+          </button>
         </p>
       </div>
     </div>
