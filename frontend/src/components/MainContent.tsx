@@ -22,10 +22,31 @@ function MainContent({ selectedIncident, incidentData, onClose, onStatusChange }
   const [isRecording, setIsRecording] = useState(false);
   const recognitionRef = useRef<any>(null);
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     if (queryText.trim()) {
-      alert(`Query submitted: ${queryText}`);
-      setQueryText('');
+      try {
+        const response = await fetch('http://localhost:8080/NL_query', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            message: queryText,
+            incident_id: selectedIncident ? selectedIncident.toString() : '',
+          }),
+        });
+
+        if (!response.ok) {
+          throw new Error('Network response was not ok');
+        }
+
+        const data = await response.json();
+        alert(`Response: ${data.response}`);
+        setQueryText('');
+      } catch (error) {
+        console.error('Error sending query:', error);
+        alert('Failed to send query. Please try again.');
+      }
     }
   };
 

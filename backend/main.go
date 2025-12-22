@@ -11,8 +11,10 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
+	"github.com/gin-contrib/cors"
 )
 
 func ReadConfig() kafka.ConfigMap {
@@ -120,6 +122,16 @@ func main() {
 	app := handlers.NewApp(cfg)
 
 	r := gin.Default() // Creates a router with default middleware (logger and recovery)
+
+	// Add CORS middleware
+	r.Use(cors.New(cors.Config{
+		AllowOrigins:     []string{"http://localhost:3000"},
+		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+		AllowHeaders:     []string{"Origin", "Content-Type", "Accept", "Authorization"},
+		ExposeHeaders:    []string{"Content-Length"},
+		AllowCredentials: true,
+		MaxAge:           12 * time.Hour,
+	}))
 
 	router.Register(r, app)
 

@@ -8,6 +8,6 @@ import (
 func Register(r *gin.Engine, app *handlers.App) {
 	r.GET("/health", app.Health)
 
-	r.GET("/NL_query", app.NLQuery)
+	r.POST("/NL_query", app.NLQuery)
 
 }
