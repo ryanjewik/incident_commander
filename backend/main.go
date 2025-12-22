@@ -1,25 +1,23 @@
 package main
 
 import (
-	"github.com/gin-gonic/gin"
 	"github.com/gin-contrib/cors"
+	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
 
+	"github.com/ryanjewik/incident_commander/backend/config"
 	"github.com/ryanjewik/incident_commander/backend/handlers"
 	"github.com/ryanjewik/incident_commander/backend/middleware"
-	"github.com/ryanjewik/incident_commander/backend/services"
-	"github.com/ryanjewik/incident_commander/backend/config"
 	"github.com/ryanjewik/incident_commander/backend/router"
+	"github.com/ryanjewik/incident_commander/backend/services"
 
 	//confluent test
 	"bufio"
 	"fmt"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
-	"github.com/gin-contrib/cors"
 )
 
 func ReadConfig() kafka.ConfigMap {
