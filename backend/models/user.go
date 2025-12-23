@@ -29,3 +29,13 @@ type JoinRequest struct {
 	CreatedAt      time.Time `firestore:"created_at" json:"created_at"`
 	UpdatedAt      time.Time `firestore:"updated_at" json:"updated_at"`
 }
+
+// Membership represents a user's membership in an organization.
+// Users may have multiple memberships; `User.OrganizationID` remains the active organization.
+type Membership struct {
+	ID             string    `firestore:"-" json:"id"`
+	UserID         string    `firestore:"user_id" json:"user_id"`
+	OrganizationID string    `firestore:"organization_id" json:"organization_id"`
+	Role           string    `firestore:"role" json:"role"`
+	CreatedAt      time.Time `firestore:"created_at" json:"created_at"`
+}

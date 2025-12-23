@@ -82,13 +82,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const signUp = useCallback(async (email: string, password: string, firstName: string, lastName: string) => {
-    await createUserWithEmailAndPassword(auth, email, password);
-    // Create backend user record
     try {
-      await apiService.createUser(email, password, firstName, lastName);
-    } catch (error) {
-      console.error('[AuthContext] Failed to create backend user:', error);
-      // If it fails, the fetchUserData will retry
+      await createUserWithEmailAndPassword(auth, email, password);
+      // Create backend user record
+      try {
+        await apiService.createUser(email, password, firstName, lastName);
+      } catch (error) {
+        console.error('[AuthContext] Failed to create backend user:', error);
+        // If it fails, the fetchUserData will retry
+      }
+    } catch (error: any) {
+      console.error('[AuthContext] Signup error:', error);
+      // Provide more helpful error messages
+      if (error.code === 'auth/email-already-in-use') {
+        throw new Error('This email is already registered. Please sign in instead or use a different email.');
+      } else if (error.code === 'auth/weak-password') {
+        throw new Error('Password should be at least 6 characters.');
+      } else if (error.code === 'auth/invalid-email') {
+        throw new Error('Invalid email address.');
+      }
+      throw error;
     }
   }, []);
 

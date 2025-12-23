@@ -203,14 +203,20 @@ func (h *AuthHandler) GetOrgUsers(c *gin.Context) {
 		return
 	}
 
+	log.Printf("[DEBUG] GetOrgUsers: fetching users for org %s", user.OrganizationID)
 	users, err := h.userService.GetUsersByOrg(ctx, user.OrganizationID)
 	if err != nil {
+		log.Printf("[ERROR] GetOrgUsers: %v", err)
 		c.JSON(
 			http.StatusInternalServerError,
 			gin.H{"error": err.Error()},
 		)
 		return
 	}
+	if users == nil {
+		users = []*models.User{}
+	}
+	log.Printf("[DEBUG] GetOrgUsers: found %d users", len(users))
 	c.JSON(http.StatusOK, users)
 }
 
@@ -250,7 +256,12 @@ func (h *AuthHandler) AddMember(c *gin.Context) {
 		return
 	}
 
-	if currentUser.Role != "admin" {
+	membership, err := h.userService.GetMembership(ctx, userID, currentUser.OrganizationID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if membership == nil || membership.Role != "admin" {
 		c.JSON(
 			http.StatusForbidden,
 			gin.H{"error": "only admins can add members"},
@@ -284,14 +295,7 @@ func (h *AuthHandler) AddMember(c *gin.Context) {
 		}
 	}
 
-	if targetUser.OrganizationID != "" && targetUser.OrganizationID != "default" {
-		c.JSON(
-			http.StatusBadRequest,
-			gin.H{"error": "user already belongs to an organization"},
-		)
-		return
-	}
-
+	// Allow adding membership even if user belongs to other organizations
 	err = h.userService.AddUserToOrg(ctx, targetUser.ID, currentUser.OrganizationID, req.Role)
 	if err != nil {
 		c.JSON(
@@ -334,7 +338,12 @@ func (h *AuthHandler) RemoveMember(c *gin.Context) {
 		return
 	}
 
-	if currentUser.Role != "admin" {
+	membership, err := h.userService.GetMembership(ctx, userID, currentUser.OrganizationID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if membership == nil || membership.Role != "admin" {
 		c.JSON(
 			http.StatusForbidden,
 			gin.H{"error": "only admins can remove members"},
@@ -351,25 +360,8 @@ func (h *AuthHandler) RemoveMember(c *gin.Context) {
 		return
 	}
 
-	// Verify target user is in the same organization
-	targetUser, err := h.userService.GetUser(ctx, targetUserID)
-	if err != nil {
-		c.JSON(
-			http.StatusNotFound,
-			gin.H{"error": "user not found"},
-		)
-		return
-	}
-
-	if targetUser.OrganizationID != currentUser.OrganizationID {
-		c.JSON(
-			http.StatusForbidden,
-			gin.H{"error": "user is not in your organization"},
-		)
-		return
-	}
-
-	err = h.userService.RemoveUserFromOrg(ctx, targetUserID)
+	// Remove membership for current admin's organization
+	err = h.userService.RemoveUserFromOrg(ctx, targetUserID, currentUser.OrganizationID)
 	if err != nil {
 		c.JSON(
 			http.StatusInternalServerError,
@@ -379,6 +371,34 @@ func (h *AuthHandler) RemoveMember(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "member removed successfully"})
+}
+
+// List organizations the current user belongs to
+func (h *AuthHandler) GetMyOrganizations(c *gin.Context) {
+	userID := middleware.GetUserID(c)
+	ctx := c.Request.Context()
+	orgs, err := h.userService.GetUserOrganizations(ctx, userID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, orgs)
+}
+
+// Set active organization for current user
+func (h *AuthHandler) SetActiveOrganization(c *gin.Context) {
+	userID := middleware.GetUserID(c)
+	var req struct{ OrganizationID string `json:"organization_id" binding:"required"` }
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	ctx := c.Request.Context()
+	if err := h.userService.SetActiveOrganization(ctx, userID, req.OrganizationID); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "active organization updated"})
 }
 
 func (h *AuthHandler) LeaveOrganization(c *gin.Context) {
@@ -402,7 +422,7 @@ func (h *AuthHandler) LeaveOrganization(c *gin.Context) {
 		return
 	}
 
-	err = h.userService.RemoveUserFromOrg(ctx, userID)
+	err = h.userService.RemoveUserFromOrg(ctx, userID, user.OrganizationID)
 	if err != nil {
 		c.JSON(
 			http.StatusInternalServerError,
@@ -471,11 +491,18 @@ func (h *AuthHandler) GetJoinRequests(c *gin.Context) {
 		return
 	}
 
-	// If user is admin, get organization's pending requests
-	// Otherwise, get user's own requests
 	var requests []*models.JoinRequest
-	if user.Role == "admin" && user.OrganizationID != "" && user.OrganizationID != "default" {
-		requests, err = h.userService.GetOrgJoinRequests(ctx, user.OrganizationID)
+	if user.OrganizationID != "" && user.OrganizationID != "default" {
+		membership, err := h.userService.GetMembership(ctx, userID, user.OrganizationID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		if membership != nil && membership.Role == "admin" {
+			requests, err = h.userService.GetOrgJoinRequests(ctx, user.OrganizationID)
+		} else {
+			requests, err = h.userService.GetUserJoinRequests(ctx, userID)
+		}
 	} else {
 		requests, err = h.userService.GetUserJoinRequests(ctx, userID)
 	}
@@ -505,18 +532,23 @@ func (h *AuthHandler) ApproveJoinRequest(c *gin.Context) {
 		return
 	}
 
-	if user.Role != "admin" {
-		c.JSON(
-			http.StatusForbidden,
-			gin.H{"error": "only admins can approve join requests"},
-		)
-		return
-	}
-
 	if user.OrganizationID == "" || user.OrganizationID == "default" {
 		c.JSON(
 			http.StatusBadRequest,
 			gin.H{"error": "you are not part of an organization"},
+		)
+		return
+	}
+
+	membership, err := h.userService.GetMembership(ctx, userID, user.OrganizationID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if membership == nil || membership.Role != "admin" {
+		c.JSON(
+			http.StatusForbidden,
+			gin.H{"error": "only admins can approve join requests"},
 		)
 		return
 	}
@@ -547,18 +579,23 @@ func (h *AuthHandler) RejectJoinRequest(c *gin.Context) {
 		return
 	}
 
-	if user.Role != "admin" {
-		c.JSON(
-			http.StatusForbidden,
-			gin.H{"error": "only admins can reject join requests"},
-		)
-		return
-	}
-
 	if user.OrganizationID == "" || user.OrganizationID == "default" {
 		c.JSON(
 			http.StatusBadRequest,
 			gin.H{"error": "you are not part of an organization"},
+		)
+		return
+	}
+
+	membership, err := h.userService.GetMembership(ctx, userID, user.OrganizationID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if membership == nil || membership.Role != "admin" {
+		c.JSON(
+			http.StatusForbidden,
+			gin.H{"error": "only admins can reject join requests"},
 		)
 		return
 	}

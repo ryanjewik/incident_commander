@@ -102,7 +102,8 @@ func (us *UserService) GetUser(ctx context.Context, userID string) (*models.User
 }
 
 func (us *UserService) GetUsersByOrg(ctx context.Context, orgID string) ([]*models.User, error) {
-	iter := us.fs.Firestore.Collection("users").
+	// Query memberships for this organization, then fetch user documents
+	iter := us.fs.Firestore.Collection("memberships").
 		Where("organization_id", "==", orgID).
 		Documents(ctx)
 
@@ -113,11 +114,22 @@ func (us *UserService) GetUsersByOrg(ctx context.Context, orgID string) ([]*mode
 			break
 		}
 
-		var user models.User
-		if err := doc.DataTo(&user); err != nil {
+		var membership models.Membership
+		if err := doc.DataTo(&membership); err != nil {
 			continue
 		}
-		user.ID = doc.Ref.ID
+
+		userDoc, err := us.fs.Firestore.Collection("users").Doc(membership.UserID).Get(ctx)
+		if err != nil {
+			continue
+		}
+		var user models.User
+		if err := userDoc.DataTo(&user); err != nil {
+			continue
+		}
+		user.ID = userDoc.Ref.ID
+		// Always use role from membership since roles are per-organization
+		user.Role = membership.Role
 		users = append(users, &user)
 	}
 
@@ -158,11 +170,16 @@ func (us *UserService) CreateOrganization(ctx context.Context, name, creatorID s
 
 	org.ID = ref.ID
 
+	// Add creator as admin member in memberships collection
+	if err := us.AddUserToOrg(ctx, creatorID, org.ID, "admin"); err != nil {
+		return nil, err
+	}
+
+	// Always set the newly created org as active and update role to admin
 	_, err = us.fs.Firestore.Collection("users").Doc(creatorID).Update(ctx, []firestore.Update{
 		{Path: "organization_id", Value: org.ID},
 		{Path: "role", Value: "admin"},
 	})
-
 	if err != nil {
 		return nil, err
 	}
@@ -195,17 +212,133 @@ func (us *UserService) GetUserByEmail(ctx context.Context, email string) (*model
 }
 
 func (us *UserService) AddUserToOrg(ctx context.Context, userID, orgID, role string) error {
-	_, err := us.fs.Firestore.Collection("users").Doc(userID).Update(ctx, []firestore.Update{
-		{Path: "organization_id", Value: orgID},
-		{Path: "role", Value: role},
-	})
-	return err
+	// Upsert membership: update role if membership already exists, otherwise create
+	docs, err := us.fs.Firestore.Collection("memberships").
+		Where("user_id", "==", userID).
+		Where("organization_id", "==", orgID).
+		Documents(ctx).GetAll()
+	if err != nil {
+		return err
+	}
+
+	if len(docs) > 0 {
+		_, err = docs[0].Ref.Update(ctx, []firestore.Update{{Path: "role", Value: role}})
+		if err != nil {
+			return err
+		}
+	} else {
+		_, _, err = us.fs.Firestore.Collection("memberships").Add(ctx, &models.Membership{
+			UserID:         userID,
+			OrganizationID: orgID,
+			Role:           role,
+			CreatedAt:      time.Now(),
+		})
+		if err != nil {
+			return err
+		}
+	}
+	// If user has no active organization, set this as active
+	user, err := us.GetUser(ctx, userID)
+	if err == nil && (user.OrganizationID == "" || user.OrganizationID == "default") {
+		_, _ = us.fs.Firestore.Collection("users").Doc(userID).Update(ctx, []firestore.Update{
+			{Path: "organization_id", Value: orgID},
+			{Path: "role", Value: role},
+		})
+	}
+	return nil
 }
 
-func (us *UserService) RemoveUserFromOrg(ctx context.Context, userID string) error {
-	_, err := us.fs.Firestore.Collection("users").Doc(userID).Update(ctx, []firestore.Update{
-		{Path: "organization_id", Value: ""},
-		{Path: "role", Value: ""},
+func (us *UserService) RemoveUserFromOrg(ctx context.Context, userID, orgID string) error {
+	// Delete membership for this user/org pair
+	iter := us.fs.Firestore.Collection("memberships").
+		Where("user_id", "==", userID).
+		Where("organization_id", "==", orgID).
+		Documents(ctx)
+	defer iter.Stop()
+	for {
+		d, err := iter.Next()
+		if err != nil {
+			break
+		}
+		_, _ = d.Ref.Delete(ctx)
+	}
+	// If active org equals removed org, clear active org
+	user, err := us.GetUser(ctx, userID)
+	if err == nil && user.OrganizationID == orgID {
+		_, _ = us.fs.Firestore.Collection("users").Doc(userID).Update(ctx, []firestore.Update{
+			{Path: "organization_id", Value: ""},
+			{Path: "role", Value: ""},
+		})
+	}
+	return nil
+}
+
+// GetMembership returns the membership for a user in a specific organization, or nil if none
+func (us *UserService) GetMembership(ctx context.Context, userID, orgID string) (*models.Membership, error) {
+	docs, err := us.fs.Firestore.Collection("memberships").
+		Where("user_id", "==", userID).
+		Where("organization_id", "==", orgID).
+		Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+	if len(docs) == 0 {
+		return nil, nil
+	}
+
+	var membership models.Membership
+	if err := docs[0].DataTo(&membership); err != nil {
+		return nil, err
+	}
+	membership.ID = docs[0].Ref.ID
+	return &membership, nil
+}
+
+// GetUserOrganizations returns organizations the user is a member of
+func (us *UserService) GetUserOrganizations(ctx context.Context, userID string) ([]*models.Organization, error) {
+	iter := us.fs.Firestore.Collection("memberships").
+		Where("user_id", "==", userID).
+		Documents(ctx)
+	defer iter.Stop()
+
+	var orgs []*models.Organization
+	for {
+		doc, err := iter.Next()
+		if err != nil {
+			break
+		}
+		var m models.Membership
+		if err := doc.DataTo(&m); err != nil {
+			continue
+		}
+		orgDoc, err := us.fs.Firestore.Collection("organizations").Doc(m.OrganizationID).Get(ctx)
+		if err != nil {
+			continue
+		}
+		var org models.Organization
+		if err := orgDoc.DataTo(&org); err != nil {
+			continue
+		}
+		org.ID = orgDoc.Ref.ID
+		orgs = append(orgs, &org)
+	}
+	return orgs, nil
+}
+
+// SetActiveOrganization sets user's active organization if they have membership
+func (us *UserService) SetActiveOrganization(ctx context.Context, userID, orgID string) error {
+	// Verify membership exists
+	iter := us.fs.Firestore.Collection("memberships").
+		Where("user_id", "==", userID).
+		Where("organization_id", "==", orgID).
+		Documents(ctx)
+	defer iter.Stop()
+	_, err := iter.Next()
+	if err != nil {
+		return errors.New("membership not found for selected organization")
+	}
+	_, err = us.fs.Firestore.Collection("users").Doc(userID).Update(ctx, []firestore.Update{
+		{Path: "organization_id", Value: orgID},
 	})
 	return err
 }
@@ -243,16 +376,12 @@ func (us *UserService) SearchOrganizations(ctx context.Context, query string) ([
 }
 
 func (us *UserService) CreateJoinRequest(ctx context.Context, userID, organizationID string) (*models.JoinRequest, error) {
-	// Check if user already has an organization
+	// Fetch user for metadata
 	user, err := us.GetUser(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
-
-	if user.OrganizationID != "" && user.OrganizationID != "default" {
-		return nil, errors.New("user already belongs to an organization")
-	}
-
+	// Allow creating requests regardless of active org; prevent duplicates only for same org pending
 	// Check if there's already a pending request
 	existingRequests, err := us.fs.Firestore.Collection("join_requests").
 		Where("user_id", "==", userID).
@@ -367,13 +496,44 @@ func (us *UserService) ApproveJoinRequest(ctx context.Context, requestID, orgID 
 		return errors.New("request has already been processed")
 	}
 
+	// Prevent approving if the user already belongs to an organization
+	user, err := us.GetUser(ctx, request.UserID)
+	if err != nil {
+		return err
+	}
+	if user.OrganizationID != "" && user.OrganizationID != "default" {
+		return errors.New("user already belongs to an organization")
+	}
+
 	// Add user to organization
 	if err := us.AddUserToOrg(ctx, request.UserID, orgID, "member"); err != nil {
 		return err
 	}
 
-	// Delete the join request
+	// Delete the processed request
 	_, err = us.fs.Firestore.Collection("join_requests").Doc(requestID).Delete(ctx)
+	if err != nil {
+		return err
+	}
+
+	// Also delete any other pending requests for this user to ensure single-organization membership
+	iter := us.fs.Firestore.Collection("join_requests").
+		Where("user_id", "==", request.UserID).
+		Where("status", "==", "pending").
+		Documents(ctx)
+	defer iter.Stop()
+
+	for {
+		d, e := iter.Next()
+		if e != nil {
+			break
+		}
+		// Skip the already-deleted requestID, but delete others
+		if d.Ref.ID == requestID {
+			continue
+		}
+		_, _ = d.Ref.Delete(ctx)
+	}
 
 	return err
 }

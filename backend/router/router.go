@@ -56,5 +56,7 @@ func Register(r *gin.Engine, app *handlers.App, userService *services.UserServic
 		protected.PUT("/organizations/join-requests/:id/approve", authHandler.ApproveJoinRequest)
 		protected.PUT("/organizations/join-requests/:id/reject", authHandler.RejectJoinRequest)
 		protected.DELETE("/organizations/join-requests/cleanup", authHandler.CleanupJoinRequests)
+		protected.GET("/my-organizations", authHandler.GetMyOrganizations)
+		protected.POST("/organizations/active", authHandler.SetActiveOrganization)
 	}
 }

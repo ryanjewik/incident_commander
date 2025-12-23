@@ -6,9 +6,11 @@ import type { User, JoinRequest, Organization } from '../services/api';
 
 interface MemberManagementModalProps {
   onClose: () => void;
+  orgId?: string; // Optional: if provided, show this org instead of active org
+  onBack?: () => void; // Optional: callback to go back to previous view
 }
 
-export default function MemberManagementModal({ onClose }: MemberManagementModalProps) {
+export default function MemberManagementModal({ onClose, orgId, onBack }: MemberManagementModalProps) {
   const [email, setEmail] = useState('');
   const [role, setRole] = useState('member');
   const [error, setError] = useState('');
@@ -26,24 +28,51 @@ export default function MemberManagementModal({ onClose }: MemberManagementModal
   const [organization, setOrganization] = useState<Organization | null>(null);
   const [loadingOrg, setLoadingOrg] = useState(true);
   const { addMember, removeMember, leaveOrganization, userData } = useAuth();
+  const [isAdmin, setIsAdmin] = useState(false);
   
-  const isAdmin = userData?.role === 'admin';
+  // Use provided orgId or fallback to user's active organization
+  const currentOrgId = orgId || userData?.organization_id || '';
 
   useEffect(() => {
+    // Clear previous data immediately when org changes to avoid displaying stale data
+    setMembers([]);
+    setLoadingMembers(true);
+    setJoinRequests([]);
+    setLoadingRequests(true);
+    setOrganization(null);
+    setLoadingOrg(true);
+    setIsAdmin(false);
+    
     loadMembers();
     loadOrganization();
-    if (isAdmin) {
-      loadJoinRequests();
-    }
-  }, [isAdmin]);
+  }, [currentOrgId]);
 
   const loadMembers = async () => {
     try {
+      setLoadingMembers(true);
+      // Ensure backend uses the selected org when viewing via org list
+      if (currentOrgId && currentOrgId !== userData?.organization_id) {
+        console.log('[MemberManagementModal] Switching to org:', currentOrgId);
+        await apiService.setActiveOrganization(currentOrgId);
+      }
+      console.log('[MemberManagementModal] Loading members for org:', currentOrgId);
       const data = await apiService.getOrgUsers();
+      console.log('[MemberManagementModal] Members loaded:', data);
       setMembers(data || []);
+      // Determine admin based on membership role for this org
+      const self = data?.find(m => m.id === userData?.id);
+      setIsAdmin(self?.role === 'admin');
+      if (self?.role === 'admin') {
+        loadJoinRequests();
+      } else {
+        setJoinRequests([]);
+        setLoadingRequests(false);
+      }
     } catch (err) {
       console.error('Failed to load members:', err);
       setMembers([]);
+      setIsAdmin(false);
+      setLoadingRequests(false);
     } finally {
       setLoadingMembers(false);
     }
@@ -64,7 +93,7 @@ export default function MemberManagementModal({ onClose }: MemberManagementModal
   const loadOrganization = async () => {
     try {
       const orgs = await apiService.searchOrganizations('');
-      const userOrg = orgs.find(org => org.id === userData?.organization_id);
+      const userOrg = orgs.find((org: Organization) => org.id === currentOrgId);
       setOrganization(userOrg || null);
     } catch (err) {
       console.error('Failed to load organization:', err);
@@ -175,9 +204,22 @@ export default function MemberManagementModal({ onClose }: MemberManagementModal
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
       <div className="bg-white p-8 rounded-lg shadow-2xl w-[600px] max-h-[80vh] overflow-y-auto">
         <div className="mb-4">
-          <h2 className="text-2xl font-bold text-gray-800">
-            {isAdmin ? 'Manage Organization' : 'Organization'}
-          </h2>
+          <div className="flex items-center gap-3 mb-2">
+            {onBack && (
+              <button
+                onClick={onBack}
+                className="text-gray-600 hover:text-gray-800 transition-colors"
+                title="Back to Organizations"
+              >
+                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                </svg>
+              </button>
+            )}
+            <h2 className="text-2xl font-bold text-gray-800">
+              {isAdmin ? 'Manage Organization' : 'Organization'}
+            </h2>
+          </div>
           {loadingOrg ? (
             <p className="text-sm text-gray-500 mt-1">Loading...</p>
           ) : organization ? (
@@ -323,7 +365,7 @@ export default function MemberManagementModal({ onClose }: MemberManagementModal
                     }`}>
                       {member.role || 'member'}
                     </span>
-                    {isAdmin && member.id !== userData.id && (
+                    {isAdmin && userData?.id && member.id !== userData.id && (
                       confirmRemove === member.id ? (
                         <div className="flex gap-1">
                           <button

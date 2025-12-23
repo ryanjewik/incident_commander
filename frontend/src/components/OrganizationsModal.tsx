@@ -5,15 +5,25 @@ import type { Organization, JoinRequest } from '../services/api';
 
 interface OrganizationsModalProps {
   onClose: () => void;
+  onOpenMemberModal?: (orgId: string) => void;
 }
 
-export default function OrganizationsModal({ onClose }: OrganizationsModalProps) {
+export default function OrganizationsModal({ onClose, onOpenMemberModal }: OrganizationsModalProps) {
   const { createOrganization } = useAuth();
-  const [activeTab, setActiveTab] = useState<'create' | 'join'>('create');
+  const { userData } = useAuth();
+  const [activeTab, setActiveTab] = useState<'create' | 'join' | 'my-orgs'>(() => {
+    // Start with 'my-orgs' tab if user already has an active org; otherwise default to create
+    return userData?.organization_id ? 'my-orgs' : 'create';
+  });
   
   // Create tab state
   const [orgName, setOrgName] = useState('');
   const [creating, setCreating] = useState(false);
+  
+  // My Organizations tab state
+  const [myOrganizations, setMyOrganizations] = useState<Organization[]>([]);
+  const [loadingMyOrgs, setLoadingMyOrgs] = useState(false);
+  const [hasMemberships, setHasMemberships] = useState(false);
   
   // Join tab state
   const [searchQuery, setSearchQuery] = useState('');
@@ -28,10 +38,31 @@ export default function OrganizationsModal({ onClose }: OrganizationsModalProps)
 
   useEffect(() => {
     loadMyRequests();
+    loadUserOrganizations(); // Always load to check membership status
     if (activeTab === 'join') {
       searchOrganizations();
     }
   }, [activeTab]);
+
+  const loadUserOrganizations = async () => {
+    try {
+      setLoadingMyOrgs(true);
+      const orgs = await apiService.getMyOrganizations();
+      setMyOrganizations(orgs || []);
+      const hasOrgs = !!orgs && orgs.length > 0;
+      setHasMemberships(hasOrgs);
+      // If the user has memberships but the active tab isn't showing them yet, switch to the tab
+      if (hasOrgs && activeTab === 'create') {
+        setActiveTab('my-orgs');
+      }
+    } catch (err) {
+      console.error('Failed to load user organizations:', err);
+      setMyOrganizations([]);
+      setHasMemberships(false);
+    } finally {
+      setLoadingMyOrgs(false);
+    }
+  };
 
   const loadMyRequests = async () => {
     try {
@@ -113,6 +144,10 @@ export default function OrganizationsModal({ onClose }: OrganizationsModalProps)
     return request;
   };
 
+  const isUserMemberOfOrg = (orgId: string): boolean => {
+    return myOrganizations.some(org => org.id === orgId);
+  };
+
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
       <div className="bg-white p-8 rounded-lg shadow-2xl w-[600px] max-h-[80vh] overflow-y-auto">
@@ -131,34 +166,50 @@ export default function OrganizationsModal({ onClose }: OrganizationsModalProps)
         )}
 
         {/* Tabs */}
-        <div className="flex border-b mb-6">
+        <div className="flex border-b mb-6 overflow-x-auto">
           <button
             onClick={() => {
               setActiveTab('create');
               setError('');
               setSuccess('');
             }}
-            className={`flex-1 py-2 text-center font-medium transition-colors ${
+            className={`flex-1 py-2 text-center font-medium transition-colors whitespace-nowrap ${
               activeTab === 'create'
                 ? 'border-b-2 border-purple-600 text-purple-600'
                 : 'text-gray-500 hover:text-gray-700'
             }`}
           >
-            Create Organization
+            Create
           </button>
+          {(userData?.organization_id || hasMemberships) && (
+            <button
+              onClick={() => {
+                setActiveTab('my-orgs');
+                setError('');
+                setSuccess('');
+              }}
+              className={`flex-1 py-2 text-center font-medium transition-colors whitespace-nowrap ${
+                activeTab === 'my-orgs'
+                  ? 'border-b-2 border-purple-600 text-purple-600'
+                  : 'text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              My Orgs
+            </button>
+          )}
           <button
             onClick={() => {
               setActiveTab('join');
               setError('');
               setSuccess('');
             }}
-            className={`flex-1 py-2 text-center font-medium transition-colors ${
+            className={`flex-1 py-2 text-center font-medium transition-colors whitespace-nowrap ${
               activeTab === 'join'
                 ? 'border-b-2 border-purple-600 text-purple-600'
                 : 'text-gray-500 hover:text-gray-700'
             }`}
           >
-            Join Organization
+            Join More
           </button>
         </div>
 
@@ -220,6 +271,7 @@ export default function OrganizationsModal({ onClose }: OrganizationsModalProps)
                 <div className="space-y-2">
                   {organizations.map((org) => {
                     const request = getRequestStatus(org.id);
+                    const isMember = isUserMemberOfOrg(org.id);
                     return (
                       <div
                         key={org.id}
@@ -231,7 +283,14 @@ export default function OrganizationsModal({ onClose }: OrganizationsModalProps)
                             Created: {new Date(org.created_at).toLocaleDateString()}
                           </p>
                         </div>
-                        {request ? (
+                        {isMember ? (
+                          <button
+                            disabled
+                            className="px-4 py-2 rounded-md text-sm font-medium cursor-not-allowed bg-green-200 text-green-800"
+                          >
+                            Joined
+                          </button>
+                        ) : request ? (
                           <button
                             disabled
                             className={`px-4 py-2 rounded-md text-sm font-medium cursor-not-allowed ${
@@ -259,6 +318,41 @@ export default function OrganizationsModal({ onClose }: OrganizationsModalProps)
                 </div>
               )}
             </div>
+          </>
+        )}
+
+        {/* My Organizations Tab Content */}
+        {activeTab === 'my-orgs' && (
+          <>
+            <h3 className="text-lg font-semibold text-gray-800 mb-3">Your Organizations</h3>
+            {loadingMyOrgs ? (
+              <p className="text-gray-600">Loading...</p>
+            ) : myOrganizations.length === 0 ? (
+              <p className="text-gray-600">You are not a member of any organizations yet.</p>
+            ) : (
+              <div className="space-y-2">
+                {myOrganizations.map((org) => (
+                  <button
+                    key={org.id}
+                    onClick={() => onOpenMemberModal?.(org.id)}
+                    className={`w-full flex items-center justify-between p-3 bg-gray-50 rounded-md border-l-4 hover:bg-gray-100 transition-colors cursor-pointer text-left ${
+                      org.id === userData?.organization_id ? 'border-purple-600 bg-purple-50 hover:bg-purple-100' : 'border-gray-300'
+                    }`}
+                  >
+                    <div className="flex-1">
+                      <p className="font-medium text-gray-800">{org.name}</p>
+                      <p className="text-sm text-gray-600">
+                        {org.id === userData?.organization_id && <span className="font-semibold text-purple-600">Active • </span>}
+                        Created: {new Date(org.created_at).toLocaleDateString()}
+                      </p>
+                    </div>
+                    <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                    </svg>
+                  </button>
+                ))}
+              </div>
+            )}
           </>
         )}
 

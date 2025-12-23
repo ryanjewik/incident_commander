@@ -1,4 +1,5 @@
-import axios from 'axios';
+import axios, { AxiosError, AxiosHeaders } from 'axios';
+import type { AxiosResponse, InternalAxiosRequestConfig } from 'axios';
 import { auth } from '../config/firebase';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8080';
@@ -12,7 +13,7 @@ const api = axios.create({
   },
 });
 
-api.interceptors.request.use(async (config) => {
+api.interceptors.request.use(async (config: InternalAxiosRequestConfig) => {
   console.log('[API] Request to:', config.url);
   const user = auth.currentUser;
   console.log('[API] Current user exists:', !!user);
@@ -21,7 +22,11 @@ api.interceptors.request.use(async (config) => {
       console.log('[API] Getting ID token with forceRefresh=false');
       const token = await user.getIdToken(false);
       console.log('[API] Token obtained, length:', token.length);
-      config.headers.Authorization = `Bearer ${token}`;
+      if (!config.headers) {
+        config.headers = new AxiosHeaders();
+      }
+      // AxiosHeaders supports set()
+      (config.headers as AxiosHeaders).set('Authorization', `Bearer ${token}`);
     } catch (error) {
       console.error('[API] Failed to get ID token:', error);
     }
@@ -32,11 +37,11 @@ api.interceptors.request.use(async (config) => {
 });
 
 api.interceptors.response.use(
-  (response) => {
+  (response: AxiosResponse) => {
     console.log('[API] Response from:', response.config.url, 'Status:', response.status);
     return response;
   },
-  async (error) => {
+  async (error: AxiosError) => {
     console.error('[API] Response error from:', error.config?.url);
     console.error('[API] Error status:', error.response?.status);
     console.error('[API] Error data:', error.response?.data);
@@ -89,7 +94,7 @@ export interface JoinRequest {
 export const apiService = {
   getMe: () => {
     console.log('[API Service] Calling getMe');
-    return api.get<User>('/api/auth/me').then(res => {
+    return api.get<User>('/api/auth/me').then((res: AxiosResponse<User>) => {
       console.log('[API Service] getMe response:', res.data);
       return res.data;
     });
@@ -97,7 +102,7 @@ export const apiService = {
   
   getOrgUsers: () => {
     console.log('[API Service] Calling getOrgUsers');
-    return api.get<User[]>('/api/auth/users').then(res => {
+    return api.get<User[]>('/api/auth/users').then((res: AxiosResponse<User[]>) => {
       console.log('[API Service] getOrgUsers response:', res.data);
       return res.data;
     });
@@ -105,7 +110,7 @@ export const apiService = {
   
   createOrganization: (name: string) => {
     console.log('[API Service] Creating organization:', name);
-    return api.post<Organization>('/api/auth/organizations', { name }).then(res => {
+    return api.post<Organization>('/api/auth/organizations', { name }).then((res: AxiosResponse<Organization>) => {
       console.log('[API Service] Organization created:', res.data);
       return res.data;
     });
@@ -113,7 +118,7 @@ export const apiService = {
   
   createUser: (email: string, password: string, firstName: string, lastName: string) => {
     console.log('[API Service] Creating user:', email);
-    return api.post<User>('/api/auth/users', { email, password, first_name: firstName, last_name: lastName }).then(res => {
+    return api.post<User>('/api/auth/users', { email, password, first_name: firstName, last_name: lastName }).then((res: AxiosResponse<User>) => {
       console.log('[API Service] User created:', res.data);
       return res.data;
     });
@@ -121,7 +126,7 @@ export const apiService = {
   
   addMember: (email: string, role: string) => {
     console.log('[API Service] Adding member:', email, role);
-    return api.post('/api/auth/organizations/members', { email, role }).then(res => {
+    return api.post('/api/auth/organizations/members', { email, role }).then((res: AxiosResponse) => {
       console.log('[API Service] Member added:', res.data);
       return res.data;
     });
@@ -129,7 +134,7 @@ export const apiService = {
 
   removeMember: (userId: string) => {
     console.log('[API Service] Removing member:', userId);
-    return api.delete(`/api/auth/organizations/members/${userId}`).then(res => {
+    return api.delete(`/api/auth/organizations/members/${userId}`).then((res: AxiosResponse) => {
       console.log('[API Service] Member removed:', res.data);
       return res.data;
     });
@@ -137,7 +142,7 @@ export const apiService = {
 
   leaveOrganization: () => {
     console.log('[API Service] Leaving organization');
-    return api.post('/api/auth/organizations/leave').then(res => {
+    return api.post('/api/auth/organizations/leave').then((res: AxiosResponse) => {
       console.log('[API Service] Left organization:', res.data);
       return res.data;
     });
@@ -145,7 +150,7 @@ export const apiService = {
 
   searchOrganizations: (query: string) => {
     console.log('[API Service] Searching organizations:', query);
-    return api.get<Organization[]>('/api/auth/organizations/search', { params: { q: query } }).then(res => {
+    return api.get<Organization[]>('/api/auth/organizations/search', { params: { q: query } }).then((res: AxiosResponse<Organization[]>) => {
       console.log('[API Service] Organizations found:', res.data);
       return res.data;
     });
@@ -153,7 +158,7 @@ export const apiService = {
 
   createJoinRequest: (organizationId: string) => {
     console.log('[API Service] Creating join request for org:', organizationId);
-    return api.post<JoinRequest>('/api/auth/organizations/join-requests', { organization_id: organizationId }).then(res => {
+    return api.post<JoinRequest>('/api/auth/organizations/join-requests', { organization_id: organizationId }).then((res: AxiosResponse<JoinRequest>) => {
       console.log('[API Service] Join request created:', res.data);
       return res.data;
     });
@@ -161,7 +166,7 @@ export const apiService = {
 
   getJoinRequests: () => {
     console.log('[API Service] Getting join requests');
-    return api.get<JoinRequest[]>('/api/auth/organizations/join-requests').then(res => {
+    return api.get<JoinRequest[]>('/api/auth/organizations/join-requests').then((res: AxiosResponse<JoinRequest[]>) => {
       console.log('[API Service] Join requests:', res.data);
       return res.data;
     });
@@ -169,7 +174,7 @@ export const apiService = {
 
   approveJoinRequest: (requestId: string) => {
     console.log('[API Service] Approving join request:', requestId);
-    return api.put(`/api/auth/organizations/join-requests/${requestId}/approve`).then(res => {
+    return api.put(`/api/auth/organizations/join-requests/${requestId}/approve`).then((res: AxiosResponse) => {
       console.log('[API Service] Join request approved:', res.data);
       return res.data;
     });
@@ -177,7 +182,7 @@ export const apiService = {
 
   rejectJoinRequest: (requestId: string) => {
     console.log('[API Service] Rejecting join request:', requestId);
-    return api.put(`/api/auth/organizations/join-requests/${requestId}/reject`).then(res => {
+    return api.put(`/api/auth/organizations/join-requests/${requestId}/reject`).then((res: AxiosResponse) => {
       console.log('[API Service] Join request rejected:', res.data);
       return res.data;
     });
@@ -185,8 +190,24 @@ export const apiService = {
 
   cleanupJoinRequests: () => {
     console.log('[API Service] Cleaning up legacy join requests');
-    return api.delete<{ deleted: number }>(`/api/auth/organizations/join-requests/cleanup`).then(res => {
+    return api.delete<{ deleted: number }>(`/api/auth/organizations/join-requests/cleanup`).then((res: AxiosResponse<{ deleted: number }>) => {
       console.log('[API Service] Cleanup result:', res.data);
+      return res.data;
+    });
+  },
+
+  getMyOrganizations: () => {
+    console.log('[API Service] Getting my organizations');
+    return api.get<Organization[]>(`/api/auth/my-organizations`).then((res: AxiosResponse<Organization[]>) => {
+      console.log('[API Service] My organizations:', res.data);
+      return res.data;
+    });
+  },
+
+  setActiveOrganization: (organizationId: string) => {
+    console.log('[API Service] Setting active organization:', organizationId);
+    return api.post(`/api/auth/organizations/active`, { organization_id: organizationId }).then((res: AxiosResponse) => {
+      console.log('[API Service] Active organization updated:', res.data);
       return res.data;
     });
   },
