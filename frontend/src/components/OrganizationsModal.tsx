@@ -24,6 +24,7 @@ export default function OrganizationsModal({ onClose, onOpenMemberModal }: Organ
   const [myOrganizations, setMyOrganizations] = useState<Organization[]>([]);
   const [loadingMyOrgs, setLoadingMyOrgs] = useState(false);
   const [hasMemberships, setHasMemberships] = useState(false);
+  const [hasUserTabSelection, setHasUserTabSelection] = useState(false);
   
   // Join tab state
   const [searchQuery, setSearchQuery] = useState('');
@@ -52,7 +53,7 @@ export default function OrganizationsModal({ onClose, onOpenMemberModal }: Organ
       const hasOrgs = !!orgs && orgs.length > 0;
       setHasMemberships(hasOrgs);
       // If the user has memberships but the active tab isn't showing them yet, switch to the tab
-      if (hasOrgs && activeTab === 'create') {
+      if (hasOrgs && activeTab === 'create' && !hasUserTabSelection) {
         setActiveTab('my-orgs');
       }
     } catch (err) {
@@ -169,6 +170,7 @@ export default function OrganizationsModal({ onClose, onOpenMemberModal }: Organ
         <div className="flex border-b mb-6 overflow-x-auto">
           <button
             onClick={() => {
+              setHasUserTabSelection(true);
               setActiveTab('create');
               setError('');
               setSuccess('');
@@ -184,6 +186,7 @@ export default function OrganizationsModal({ onClose, onOpenMemberModal }: Organ
           {(userData?.organization_id || hasMemberships) && (
             <button
               onClick={() => {
+                setHasUserTabSelection(true);
                 setActiveTab('my-orgs');
                 setError('');
                 setSuccess('');
@@ -199,6 +202,7 @@ export default function OrganizationsModal({ onClose, onOpenMemberModal }: Organ
           )}
           <button
             onClick={() => {
+              setHasUserTabSelection(true);
               setActiveTab('join');
               setError('');
               setSuccess('');
