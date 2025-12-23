@@ -1,7 +1,10 @@
 package main
 
 import (
+	"log"
+
 	"github.com/gin-gonic/gin"
+	"github.com/joho/godotenv"
 
 	"github.com/ryanjewik/incident_commander/backend/config"
 	"github.com/ryanjewik/incident_commander/backend/handlers"
@@ -109,6 +112,10 @@ func consume(topic string, config kafka.ConfigMap) {
 }
 
 func main() {
+	// Load .env file - this must come BEFORE config.Load()
+	if err := godotenv.Load(); err != nil {
+		log.Println("No .env file found, using environment variables")
+	}
 
 	topic := "topic_0"
 	kafkaconfig := ReadConfig()
@@ -120,6 +127,11 @@ func main() {
 
 	cfg := config.Load()
 
+	if cfg.Port == "" {
+		cfg.Port = "8080"
+		log.Println("defaulting:8080")
+	}
+
 	firebaseService, err := services.NewFirebaseService(cfg.FirebaseCredentialsPath)
 	if err != nil {
 		panic(err)
@@ -130,9 +142,10 @@ func main() {
 
 	app := handlers.NewApp(cfg)
 
-	r := gin.Default() // Creates a router with default middleware (logger and recovery)
+	r := gin.Default()
 
 	router.Register(r, app, userService)
 
-	r.Run(":" + cfg.Port) // Listen and serve on port 8080
+	log.Printf("Starting server on port %s", cfg.Port)
+	r.Run(":" + cfg.Port)
 }

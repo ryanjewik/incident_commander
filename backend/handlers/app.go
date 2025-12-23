@@ -2,14 +2,20 @@ package handlers
 
 import (
 	"github.com/ryanjewik/incident_commander/backend/config"
+	"github.com/ryanjewik/incident_commander/backend/services"
 )
 
 type App struct {
-	Cfg config.Config
+	Cfg          config.Config
+	KafkaService *services.KafkaService
 }
 
-func NewApp(cfg config.Config) *App {
+func NewApp(
+	cfg config.Config,
+	kafkaService *services.KafkaService,
+) *App {
 	return &App{
-		Cfg: cfg,
+		Cfg:          cfg,
+		KafkaService: kafkaService,
 	}
 }
