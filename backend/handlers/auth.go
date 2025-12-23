@@ -388,7 +388,9 @@ func (h *AuthHandler) GetMyOrganizations(c *gin.Context) {
 // Set active organization for current user
 func (h *AuthHandler) SetActiveOrganization(c *gin.Context) {
 	userID := middleware.GetUserID(c)
-	var req struct{ OrganizationID string `json:"organization_id" binding:"required"` }
+	var req struct {
+		OrganizationID string `json:"organization_id" binding:"required"`
+	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
