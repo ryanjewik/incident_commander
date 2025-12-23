@@ -1,3 +1,4 @@
+import { getAuth } from "firebase/auth";
 import { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import MainContent from '../components/MainContent';
@@ -14,6 +15,14 @@ import type { Organization } from '../services/api';
 import { apiService } from '../services/api';
 
 export default function Dashboard() {
+    useEffect(() => {
+      const auth = getAuth();
+      if (auth.currentUser) {
+        console.log("Firebase UID:", auth.currentUser.uid);
+      } else {
+        console.log("No user is logged in");
+      }
+    }, []);
   const { signOut, userData, leaveOrganization, refreshUserData } = useAuth();
   
   const [selectedIncident, setSelectedIncident] = useState<number | null>(null);
@@ -117,7 +126,7 @@ export default function Dashboard() {
         <div className="flex items-center gap-4">
           <button
             onClick={() => setShowDashboard(!showDashboard)}
-            className="bg-white text-purple-600 px-4 py-2 rounded-md hover:bg-gray-100 font-medium"
+            className="bg-white text-white px-4 py-2 rounded-md hover:bg-gray-100 font-medium"
           >
             {showDashboard ? 'Incidents' : 'Dashboard'}
           </button>
@@ -137,7 +146,7 @@ export default function Dashboard() {
           )}
           <button
             onClick={() => setShowOrgsModal(true)}
-            className="bg-white text-purple-600 px-4 py-2 rounded-md hover:bg-gray-100 font-medium"
+            className="bg-white text-white px-4 py-2 rounded-md hover:bg-gray-100 font-medium"
           >
             Organizations
           </button>
@@ -148,7 +157,7 @@ export default function Dashboard() {
           </span>
           <button
             onClick={signOut}
-            className="bg-white text-purple-600 px-4 py-2 rounded-md hover:bg-gray-100 font-medium"
+            className="bg-white text-white px-4 py-2 rounded-md hover:bg-gray-100 font-medium"
           >
             Sign Out
           </button>
