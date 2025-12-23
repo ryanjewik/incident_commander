@@ -46,7 +46,15 @@ func Register(r *gin.Engine, app *handlers.App, userService *services.UserServic
 	{
 		protected.GET("/me", authHandler.GetMe)
 		protected.POST("/organizations", authHandler.CreateOrganization)
+		protected.POST("/organizations/leave", authHandler.LeaveOrganization)
+		protected.GET("/organizations/search", authHandler.SearchOrganizations)
 		protected.GET("/users", authHandler.GetOrgUsers)
 		protected.POST("/organizations/members", authHandler.AddMember)
+		protected.DELETE("/organizations/members/:userId", authHandler.RemoveMember)
+		protected.POST("/organizations/join-requests", authHandler.CreateJoinRequest)
+		protected.GET("/organizations/join-requests", authHandler.GetJoinRequests)
+		protected.PUT("/organizations/join-requests/:id/approve", authHandler.ApproveJoinRequest)
+		protected.PUT("/organizations/join-requests/:id/reject", authHandler.RejectJoinRequest)
+		protected.DELETE("/organizations/join-requests/cleanup", authHandler.CleanupJoinRequests)
 	}
 }

@@ -44,12 +44,14 @@ api.interceptors.response.use(
     if (error.response?.status === 401) {
       const currentPath = window.location.pathname;
       console.log('[API] 401 error, current path:', currentPath);
+      
+      // Only sign out if we're not on auth pages
+      // Let the caller (AuthContext) handle the error appropriately
       if (currentPath !== '/login' && currentPath !== '/signup') {
-        console.log('[API] Signing out and redirecting to login');
+        console.log('[API] 401 on protected route - signing out user');
         await auth.signOut();
-        window.location.href = '/login';
       } else {
-        console.log('[API] Already on login/signup page, not redirecting');
+        console.log('[API] 401 on auth page, letting caller handle it');
       }
     }
     return Promise.reject(error);
@@ -59,7 +61,8 @@ api.interceptors.response.use(
 export interface User {
   id: string;
   email: string;
-  display_name: string;
+  first_name: string;
+  last_name: string;
   organization_id: string;
   role: string;
   created_at: string;
@@ -69,6 +72,18 @@ export interface Organization {
   id: string;
   name: string;
   created_at: string;
+}
+
+export interface JoinRequest {
+  id: string;
+  user_id: string;
+  user_email: string;
+  user_first_name: string;
+  user_last_name: string;
+  organization_id: string;
+  status: 'pending' | 'approved' | 'rejected';
+  created_at: string;
+  updated_at: string;
 }
 
 export const apiService = {
@@ -88,14 +103,6 @@ export const apiService = {
     });
   },
   
-  getOrganization: (orgId: string) => {
-    console.log('[API Service] Calling getOrganization with id:', orgId);
-    return api.get<Organization>(`/api/auth/organizations/${orgId}`).then(res => {
-      console.log('[API Service] getOrganization response:', res.data);
-      return res.data;
-    });
-  },
-  
   createOrganization: (name: string) => {
     console.log('[API Service] Creating organization:', name);
     return api.post<Organization>('/api/auth/organizations', { name }).then(res => {
@@ -104,9 +111,9 @@ export const apiService = {
     });
   },
   
-  createUser: (email: string, password: string, display_name: string) => {
+  createUser: (email: string, password: string, firstName: string, lastName: string) => {
     console.log('[API Service] Creating user:', email);
-    return api.post<User>('/api/auth/users', { email, password, display_name }).then(res => {
+    return api.post<User>('/api/auth/users', { email, password, first_name: firstName, last_name: lastName }).then(res => {
       console.log('[API Service] User created:', res.data);
       return res.data;
     });
@@ -116,6 +123,70 @@ export const apiService = {
     console.log('[API Service] Adding member:', email, role);
     return api.post('/api/auth/organizations/members', { email, role }).then(res => {
       console.log('[API Service] Member added:', res.data);
+      return res.data;
+    });
+  },
+
+  removeMember: (userId: string) => {
+    console.log('[API Service] Removing member:', userId);
+    return api.delete(`/api/auth/organizations/members/${userId}`).then(res => {
+      console.log('[API Service] Member removed:', res.data);
+      return res.data;
+    });
+  },
+
+  leaveOrganization: () => {
+    console.log('[API Service] Leaving organization');
+    return api.post('/api/auth/organizations/leave').then(res => {
+      console.log('[API Service] Left organization:', res.data);
+      return res.data;
+    });
+  },
+
+  searchOrganizations: (query: string) => {
+    console.log('[API Service] Searching organizations:', query);
+    return api.get<Organization[]>('/api/auth/organizations/search', { params: { q: query } }).then(res => {
+      console.log('[API Service] Organizations found:', res.data);
+      return res.data;
+    });
+  },
+
+  createJoinRequest: (organizationId: string) => {
+    console.log('[API Service] Creating join request for org:', organizationId);
+    return api.post<JoinRequest>('/api/auth/organizations/join-requests', { organization_id: organizationId }).then(res => {
+      console.log('[API Service] Join request created:', res.data);
+      return res.data;
+    });
+  },
+
+  getJoinRequests: () => {
+    console.log('[API Service] Getting join requests');
+    return api.get<JoinRequest[]>('/api/auth/organizations/join-requests').then(res => {
+      console.log('[API Service] Join requests:', res.data);
+      return res.data;
+    });
+  },
+
+  approveJoinRequest: (requestId: string) => {
+    console.log('[API Service] Approving join request:', requestId);
+    return api.put(`/api/auth/organizations/join-requests/${requestId}/approve`).then(res => {
+      console.log('[API Service] Join request approved:', res.data);
+      return res.data;
+    });
+  },
+
+  rejectJoinRequest: (requestId: string) => {
+    console.log('[API Service] Rejecting join request:', requestId);
+    return api.put(`/api/auth/organizations/join-requests/${requestId}/reject`).then(res => {
+      console.log('[API Service] Join request rejected:', res.data);
+      return res.data;
+    });
+  },
+
+  cleanupJoinRequests: () => {
+    console.log('[API Service] Cleaning up legacy join requests');
+    return api.delete<{ deleted: number }>(`/api/auth/organizations/join-requests/cleanup`).then(res => {
+      console.log('[API Service] Cleanup result:', res.data);
       return res.data;
     });
   },

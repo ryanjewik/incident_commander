@@ -1,6 +1,5 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import type { FormEvent } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 
 
@@ -14,7 +13,15 @@ export default function Login({ onSwitchToSignup }: LoginProps) {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const { signIn } = useAuth();
-  const navigate = useNavigate();
+
+  const emailValid = useMemo(() => {
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    return email === '' || emailRegex.test(email);
+  }, [email]);
+
+  const formValid = useMemo(() => {
+    return emailValid && email !== '' && password !== '';
+  }, [emailValid, email, password]);
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -23,7 +30,7 @@ export default function Login({ onSwitchToSignup }: LoginProps) {
 
     try {
       await signIn(email, password);
-      navigate('/');
+      // Don't navigate here - let AuthPage handle redirect after auth state updates
     } catch (err: any) {
       setError(err.message || 'Failed to sign in');
     } finally {
@@ -54,8 +61,15 @@ export default function Login({ onSwitchToSignup }: LoginProps) {
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               required
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+              className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 ${
+                emailValid
+                  ? 'border-gray-300 focus:ring-purple-500'
+                  : 'border-red-500 focus:ring-red-500'
+              }`}
             />
+            {!emailValid && email !== '' && (
+              <p className="text-xs text-red-600 mt-1">Please enter a valid email address</p>
+            )}
           </div>
 
           <div>
@@ -73,7 +87,7 @@ export default function Login({ onSwitchToSignup }: LoginProps) {
 
           <button
             type="submit"
-            disabled={loading}
+            disabled={loading || !formValid}
             className="w-full bg-gradient-to-r from-purple-600 to-pink-600 text-white py-2 rounded-md hover:from-purple-700 hover:to-pink-700 disabled:opacity-50 font-medium"
           >
             {loading ? 'Signing in...' : 'Sign In'}

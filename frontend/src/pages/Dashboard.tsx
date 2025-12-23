@@ -8,16 +8,18 @@ import SystemHealth from '../components/dashboard_dummies/SystemHealth';
 import RecentLogs from '../components/dashboard_dummies/RecentLogs';
 import StatusDistribution from '../components/dashboard_dummies/StatusDistribution';
 import PerformanceMetrics from '../components/dashboard_dummies/PerformanceMetrics';
-import OrganizationModal from '../components/OrganizationModal';
+import OrganizationsModal from '../components/OrganizationsModal';
 import MemberManagementModal from '../components/MemberManagementModal';
 
 export default function Dashboard() {
-  const { signOut, userData } = useAuth();
+  const { signOut, userData, leaveOrganization } = useAuth();
   
   const [selectedIncident, setSelectedIncident] = useState<number | null>(null);
   const [showDashboard, setShowDashboard] = useState(false);
-  const [showOrgModal, setShowOrgModal] = useState(false);
+  const [showOrgsModal, setShowOrgsModal] = useState(false);
   const [showMemberModal, setShowMemberModal] = useState(false);
+  const [showLeaveConfirm, setShowLeaveConfirm] = useState(false);
+  const [leaving, setLeaving] = useState(false);
 
   const [incidentData, setIncidentData] = useState([
     { id: 1, title: 'Network Outage', status: 'Active', date: '2025-06-01T14:32:15', type: 'Incident Report', description: 'Multiple reports of network connectivity issues affecting the east coast data center. Primary and backup routers are experiencing intermittent failures.' },
@@ -48,7 +50,19 @@ export default function Dashboard() {
   };
 
   const hasOrganization = userData?.organization_id && userData.organization_id !== '' && userData.organization_id !== 'default';
-  const isAdmin = userData?.role === 'admin';
+
+  const handleLeaveOrganization = async () => {
+    setLeaving(true);
+    try {
+      await leaveOrganization();
+      setShowLeaveConfirm(false);
+    } catch (error) {
+      console.error('Failed to leave organization:', error);
+      alert('Failed to leave organization. Please try again.');
+    } finally {
+      setLeaving(false);
+    }
+  };
 
   return (
     <>
@@ -65,23 +79,24 @@ export default function Dashboard() {
           </button>
           {!hasOrganization && (
             <button
-              onClick={() => setShowOrgModal(true)}
+              onClick={() => setShowOrgsModal(true)}
               className="bg-yellow-400 text-purple-900 px-4 py-2 rounded-md hover:bg-yellow-300 font-medium"
             >
-              Create Organization
+              Organizations
             </button>
           )}
-          {hasOrganization && isAdmin && (
+          {hasOrganization && (
             <button
               onClick={() => setShowMemberModal(true)}
               className="bg-white text-purple-600 px-4 py-2 rounded-md hover:bg-gray-100 font-medium"
             >
-              Manage Members
+              Organization
             </button>
           )}
           <span className="text-white font-medium">
-            {userData?.display_name}
-            {userData?.role && ` (${userData.role})`}
+            {userData?.first_name && userData?.last_name
+              ? `${userData.first_name} ${userData.last_name}`
+              : userData?.email?.split('@')[0] || 'User'}
           </span>
           <button
             onClick={signOut}
@@ -129,12 +144,39 @@ export default function Dashboard() {
         )}
       </div>
 
-      {showOrgModal && (
-        <OrganizationModal onClose={() => setShowOrgModal(false)} />
+      {showOrgsModal && (
+        <OrganizationsModal onClose={() => setShowOrgsModal(false)} />
       )}
       
       {showMemberModal && (
         <MemberManagementModal onClose={() => setShowMemberModal(false)} />
+      )}
+
+      {showLeaveConfirm && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white p-8 rounded-lg shadow-2xl max-w-md">
+            <h2 className="text-2xl font-bold text-gray-800 mb-4">Leave Organization?</h2>
+            <p className="text-gray-600 mb-6">
+              Are you sure you want to leave this organization? You will lose access to all organization resources and data.
+            </p>
+            <div className="flex gap-4">
+              <button
+                onClick={handleLeaveOrganization}
+                disabled={leaving}
+                className="flex-1 bg-red-600 text-white py-2 rounded-md hover:bg-red-700 disabled:opacity-50 font-medium"
+              >
+                {leaving ? 'Leaving...' : 'Yes, Leave'}
+              </button>
+              <button
+                onClick={() => setShowLeaveConfirm(false)}
+                disabled={leaving}
+                className="flex-1 bg-gray-300 text-gray-700 py-2 rounded-md hover:bg-gray-400 disabled:opacity-50 font-medium"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </>
   );
