@@ -470,6 +470,13 @@ func (us *UserService) GetOrgJoinRequests(ctx context.Context, orgID string) ([]
 			continue
 		}
 
+		// Check if user is already a member of the org
+		user, err := us.GetUser(ctx, request.UserID)
+		if err == nil && user.OrganizationID == orgID {
+			// User is already a member, skip this join request
+			continue
+		}
+
 		request.ID = doc.Ref.ID
 		requests = append(requests, &request)
 	}
@@ -496,14 +503,7 @@ func (us *UserService) ApproveJoinRequest(ctx context.Context, requestID, orgID 
 		return errors.New("request has already been processed")
 	}
 
-	// Prevent approving if the user already belongs to an organization
-	user, err := us.GetUser(ctx, request.UserID)
-	if err != nil {
-		return err
-	}
-	if user.OrganizationID != "" && user.OrganizationID != "default" {
-		return errors.New("user already belongs to an organization")
-	}
+	// Allow users to join multiple organizations: do not check OrganizationID
 
 	// Add user to organization
 	if err := us.AddUserToOrg(ctx, request.UserID, orgID, "member"); err != nil {

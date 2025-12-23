@@ -16,6 +16,22 @@ type AuthHandler struct {
 	userService *services.UserService
 }
 
+// GetOrgUsersById returns all users for a given organization ID (admin or member view)
+func (h *AuthHandler) GetOrgUsersById(c *gin.Context) {
+	orgID := c.Param("orgId")
+	ctx := c.Request.Context()
+
+	users, err := h.userService.GetUsersByOrg(ctx, orgID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if users == nil {
+		users = []*models.User{}
+	}
+	c.JSON(http.StatusOK, users)
+}
+
 // isPasswordValid checks if password meets security requirements
 func isPasswordValid(password string) bool {
 	if len(password) < 8 || len(password) > 128 {
@@ -101,7 +117,6 @@ func (h *AuthHandler) CreateUser(c *gin.Context) {
 
 func (h *AuthHandler) GetMe(c *gin.Context) {
 	userID := middleware.GetUserID(c)
-
 	ctx := c.Request.Context()
 	user, err := h.userService.GetUser(ctx, userID)
 	if err != nil {
@@ -484,31 +499,7 @@ func (h *AuthHandler) GetJoinRequests(c *gin.Context) {
 	userID := middleware.GetUserID(c)
 	ctx := c.Request.Context()
 
-	user, err := h.userService.GetUser(ctx, userID)
-	if err != nil {
-		c.JSON(
-			http.StatusInternalServerError,
-			gin.H{"error": err.Error()},
-		)
-		return
-	}
-
-	var requests []*models.JoinRequest
-	if user.OrganizationID != "" && user.OrganizationID != "default" {
-		membership, err := h.userService.GetMembership(ctx, userID, user.OrganizationID)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
-		if membership != nil && membership.Role == "admin" {
-			requests, err = h.userService.GetOrgJoinRequests(ctx, user.OrganizationID)
-		} else {
-			requests, err = h.userService.GetUserJoinRequests(ctx, userID)
-		}
-	} else {
-		requests, err = h.userService.GetUserJoinRequests(ctx, userID)
-	}
-
+	requests, err := h.userService.GetUserJoinRequests(ctx, userID)
 	if err != nil {
 		c.JSON(
 			http.StatusInternalServerError,
@@ -520,6 +511,7 @@ func (h *AuthHandler) GetJoinRequests(c *gin.Context) {
 	c.JSON(http.StatusOK, requests)
 }
 
+// Old: ApproveJoinRequest (kept for backward compatibility, but should be deprecated)
 func (h *AuthHandler) ApproveJoinRequest(c *gin.Context) {
 	userID := middleware.GetUserID(c)
 	requestID := c.Param("id")
@@ -556,6 +548,39 @@ func (h *AuthHandler) ApproveJoinRequest(c *gin.Context) {
 	}
 
 	err = h.userService.ApproveJoinRequest(ctx, requestID, user.OrganizationID)
+	if err != nil {
+		c.JSON(
+			http.StatusBadRequest,
+			gin.H{"error": err.Error()},
+		)
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "join request approved"})
+}
+
+// New: ApproveJoinRequestForOrg (uses orgId from route)
+func (h *AuthHandler) ApproveJoinRequestForOrg(c *gin.Context) {
+	userID := middleware.GetUserID(c)
+	orgID := c.Param("orgId")
+	requestID := c.Param("id")
+
+	ctx := c.Request.Context()
+	// Check admin membership for this org
+	membership, err := h.userService.GetMembership(ctx, userID, orgID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if membership == nil || membership.Role != "admin" {
+		c.JSON(
+			http.StatusForbidden,
+			gin.H{"error": "only admins can approve join requests for this organization"},
+		)
+		return
+	}
+
+	err = h.userService.ApproveJoinRequest(ctx, requestID, orgID)
 	if err != nil {
 		c.JSON(
 			http.StatusBadRequest,
@@ -638,4 +663,23 @@ func (h *AuthHandler) CleanupJoinRequests(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"deleted": count})
+}
+
+// GetOrgJoinRequests returns all pending join requests for a specific organization (admin only)
+func (h *AuthHandler) GetOrgJoinRequests(c *gin.Context) {
+	orgID := c.Param("orgId")
+	ctx := c.Request.Context()
+
+	// Optionally, check if user is admin of this org (not shown here)
+
+	requests, err := h.userService.GetOrgJoinRequests(ctx, orgID)
+	if err != nil {
+		c.JSON(
+			http.StatusInternalServerError,
+			gin.H{"error": err.Error()},
+		)
+		return
+	}
+
+	c.JSON(http.StatusOK, requests)
 }

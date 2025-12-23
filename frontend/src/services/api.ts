@@ -99,13 +99,21 @@ export const apiService = {
       return res.data;
     });
   },
-  
-  getOrgUsers: () => {
-    console.log('[API Service] Calling getOrgUsers');
-    return api.get<User[]>('/api/auth/users').then((res: AxiosResponse<User[]>) => {
-      console.log('[API Service] getOrgUsers response:', res.data);
-      return res.data;
-    });
+
+  getOrgUsers: (orgId?: string) => {
+    if (orgId) {
+      console.log('[API Service] Calling getOrgUsers for org:', orgId);
+      return api.get<User[]>(`/api/auth/organizations/${orgId}/users`).then((res: AxiosResponse<User[]>) => {
+        console.log('[API Service] getOrgUsers (org) response:', res.data);
+        return res.data;
+      });
+    } else {
+      console.log('[API Service] Calling getOrgUsers (active org)');
+      return api.get<User[]>('/api/auth/users').then((res: AxiosResponse<User[]>) => {
+        console.log('[API Service] getOrgUsers response:', res.data);
+        return res.data;
+      });
+    }
   },
   
   createOrganization: (name: string) => {
@@ -172,9 +180,9 @@ export const apiService = {
     });
   },
 
-  approveJoinRequest: (requestId: string) => {
-    console.log('[API Service] Approving join request:', requestId);
-    return api.put(`/api/auth/organizations/join-requests/${requestId}/approve`).then((res: AxiosResponse) => {
+  approveJoinRequest: (orgId: string, requestId: string) => {
+    console.log('[API Service] Approving join request:', requestId, 'for org:', orgId);
+    return api.put(`/api/auth/organizations/${orgId}/join-requests/${requestId}/approve`).then((res: AxiosResponse) => {
       console.log('[API Service] Join request approved:', res.data);
       return res.data;
     });
@@ -208,6 +216,14 @@ export const apiService = {
     console.log('[API Service] Setting active organization:', organizationId);
     return api.post(`/api/auth/organizations/active`, { organization_id: organizationId }).then((res: AxiosResponse) => {
       console.log('[API Service] Active organization updated:', res.data);
+      return res.data;
+    });
+  },
+
+  getOrgJoinRequests: (organizationId: string) => {
+    console.log('[API Service] Getting join requests for org:', organizationId);
+    return api.get<JoinRequest[]>(`/api/auth/organizations/${organizationId}/join-requests`).then((res: AxiosResponse<JoinRequest[]>) => {
+      console.log('[API Service] Org join requests:', res.data);
       return res.data;
     });
   },
