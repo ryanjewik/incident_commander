@@ -140,7 +140,7 @@ func (us *UserService) CreateOrganization(ctx context.Context, name, creatorID s
 	// Check if organization name already exists
 	iter := us.fs.Firestore.Collection("organizations").Where("name", "==", name).Documents(ctx)
 	defer iter.Stop()
-	
+
 	doc, err := iter.Next()
 	if err == nil && doc != nil {
 		return nil, errors.New("organization with this name already exists")
@@ -226,7 +226,7 @@ func (us *UserService) SearchOrganizations(ctx context.Context, query string) ([
 			continue
 		}
 		org.ID = doc.Ref.ID
-		
+
 		// Filter by query if provided (case-insensitive substring match)
 		if query != "" {
 			lowerQuery := strings.ToLower(query)
@@ -235,7 +235,7 @@ func (us *UserService) SearchOrganizations(ctx context.Context, query string) ([
 				continue
 			}
 		}
-		
+
 		organizations = append(organizations, &org)
 	}
 
@@ -335,12 +335,12 @@ func (us *UserService) GetOrgJoinRequests(ctx context.Context, orgID string) ([]
 		if err := doc.DataTo(&request); err != nil {
 			continue
 		}
-		
+
 		// Filter for pending status in application code
 		if request.Status != "pending" {
 			continue
 		}
-		
+
 		request.ID = doc.Ref.ID
 		requests = append(requests, &request)
 	}
