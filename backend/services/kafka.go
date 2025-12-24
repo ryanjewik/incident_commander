@@ -7,24 +7,22 @@ import (
 	"log"
 	"time"
 
-	"github.com/segmentio/kafka-go"
+	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 )
 
 type KafkaService struct {
-	brokers []string
-	writer  *kafka.Writer
+	producer *kafka.Producer
+	consumer *kafka.Consumer
 }
 
 type IncidentAnalysisRequest struct {
-	QueryID        string                 `json:"query_id"`
-	Message        string                 `json:"message"`
-	IncidentID     string                 `json:"incident_id"`
-	Intent         string                 `json:"intent"`
-	Agents         []string               `json:"agents"`
-	IncidentData   map[string]interface{} `json:"incident_data"`
-	AgentInputs    map[string]interface{} `json:"agent_inputs,omitempty"`
-	Timestamp      time.Time              `json:"timestamp"`
-	OrganizationID string                 `json:"organization_id,omitempty"`
+	QueryID      string                 `json:"query_id"`
+	Message      string                 `json:"message"`
+	IncidentID   string                 `json:"incident_id"`
+	Intent       string                 `json:"intent"`
+	Agents       []string               `json:"agents"`
+	IncidentData map[string]interface{} `json:"incident_data"`
+	Timestamp    time.Time              `json:"timestamp"`
 }
 
 type AgentResponse struct {
@@ -36,18 +34,42 @@ type AgentResponse struct {
 	Timestamp time.Time              `json:"timestamp"`
 }
 
-func NewKafkaService(brokers []string) *KafkaService {
-	writer := &kafka.Writer{
-		Addr:         kafka.TCP(brokers...),
-		Balancer:     &kafka.LeastBytes{},
-		RequiredAcks: kafka.RequireOne,
-		Async:        false,
+func NewKafkaService(config kafka.ConfigMap) (*KafkaService, error) {
+	producer, err := kafka.NewProducer(&config)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create producer: %w", err)
 	}
 
-	return &KafkaService{
-		brokers: brokers,
-		writer:  writer,
+	consumerConfig := kafka.ConfigMap{}
+	for k, v := range config {
+		consumerConfig[k] = v
 	}
+	consumerConfig["group.id"] = "backend-consumer-group"
+	consumerConfig["auto.offset.reset"] = "latest"
+
+	consumer, err := kafka.NewConsumer(&consumerConfig)
+	if err != nil {
+		producer.Close()
+		return nil, fmt.Errorf("failed to create consumer: %w", err)
+	}
+
+	go func() {
+		for e := range producer.Events() {
+			switch ev := e.(type) {
+			case *kafka.Message:
+				if ev.TopicPartition.Error != nil {
+					log.Printf("Delivery failed: %v\n", ev.TopicPartition)
+				} else {
+					log.Printf("Delivered message to %v\n", ev.TopicPartition)
+				}
+			}
+		}
+	}()
+
+	return &KafkaService{
+		producer: producer,
+		consumer: consumer,
+	}, nil
 }
 
 func (k *KafkaService) PublishAnalysisRequest(ctx context.Context, topic string, req IncidentAnalysisRequest) error {
@@ -56,66 +78,79 @@ func (k *KafkaService) PublishAnalysisRequest(ctx context.Context, topic string,
 		return fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	msg := kafka.Message{
-		Topic: topic,
-		Key:   []byte(req.QueryID),
-		Value: data,
-		Time:  time.Now(),
-	}
+	err = k.producer.Produce(&kafka.Message{
+		TopicPartition: kafka.TopicPartition{Topic: &topic, Partition: kafka.PartitionAny},
+		Value:          data,
+		Key:            []byte(req.QueryID),
+	}, nil)
 
-	err = k.writer.WriteMessages(ctx, msg)
 	if err != nil {
-		return fmt.Errorf("failed to write message to kafka: %w", err)
+		return fmt.Errorf("failed to produce message: %w", err)
 	}
 
-	log.Printf("Published analysis request to topic %s: queryID=%s", topic, req.QueryID)
+	return nil
+}
+
+// PublishMessage publishes a simple string message to a Kafka topic
+func (k *KafkaService) PublishMessage(ctx context.Context, topic string, message string) error {
+	err := k.producer.Produce(&kafka.Message{
+		TopicPartition: kafka.TopicPartition{Topic: &topic, Partition: kafka.PartitionAny},
+		Value:          []byte(message),
+	}, nil)
+
+	if err != nil {
+		return fmt.Errorf("failed to produce message: %w", err)
+	}
+
+	// Wait for message to be delivered
+	k.producer.Flush(5000)
+
 	return nil
 }
 
 func (k *KafkaService) ReadAgentResponse(ctx context.Context, topic string, queryID string, timeout time.Duration) (*AgentResponse, error) {
-	reader := kafka.NewReader(kafka.ReaderConfig{
-		Brokers:        k.brokers,
-		Topic:          topic,
-		GroupID:        fmt.Sprintf("backend-consumer-%s", queryID),
-		MinBytes:       1,
-		MaxBytes:       10e6,
-		CommitInterval: time.Second,
-		StartOffset:    kafka.LastOffset,
-	})
-	defer reader.Close()
+	err := k.consumer.Subscribe(topic, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to subscribe: %w", err)
+	}
+	defer k.consumer.Unsubscribe()
 
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
+	deadline := time.Now().Add(timeout)
 
-	for {
-		msg, err := reader.FetchMessage(ctx)
-		if err != nil {
-			if err == context.DeadlineExceeded {
-				return nil, fmt.Errorf("timeout waiting for agent response")
-			}
-			return nil, fmt.Errorf("failed to fetch message: %w", err)
-		}
-
-		var response AgentResponse
-		if err := json.Unmarshal(msg.Value, &response); err != nil {
-			log.Printf("Failed to unmarshal response: %v", err)
-			reader.CommitMessages(ctx, msg)
+	for time.Now().Before(deadline) {
+		ev := k.consumer.Poll(1000)
+		if ev == nil {
 			continue
 		}
 
-		if response.QueryID == queryID {
-			reader.CommitMessages(ctx, msg)
-			log.Printf("Received agent response: queryID=%s, agent=%s", response.QueryID, response.AgentName)
-			return &response, nil
-		}
+		switch e := ev.(type) {
+		case *kafka.Message:
+			var response AgentResponse
+			if err := json.Unmarshal(e.Value, &response); err != nil {
+				log.Printf("Failed to unmarshal response: %v", err)
+				continue
+			}
 
-		reader.CommitMessages(ctx, msg)
+			if response.QueryID == queryID {
+				return &response, nil
+			}
+
+		case kafka.Error:
+			log.Printf("Kafka error: %v", e)
+			if e.Code() == kafka.ErrAllBrokersDown {
+				return nil, fmt.Errorf("all brokers are down")
+			}
+		}
 	}
+
+	return nil, fmt.Errorf("timeout waiting for response")
 }
 
-func (k *KafkaService) Close() error {
-	if k.writer != nil {
-		return k.writer.Close()
+func (k *KafkaService) Close() {
+	if k.producer != nil {
+		k.producer.Close()
 	}
-	return nil
+	if k.consumer != nil {
+		k.consumer.Close()
+	}
 }

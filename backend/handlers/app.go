@@ -6,16 +6,22 @@ import (
 )
 
 type App struct {
-	Cfg          config.Config
-	KafkaService *services.KafkaService
+	Cfg             config.Config
+	KafkaService    *services.KafkaService
+	UserService     *services.UserService
+	FirebaseService *services.FirebaseService
 }
 
 func NewApp(
 	cfg config.Config,
 	kafkaService *services.KafkaService,
+	userService *services.UserService,
+	firebaseService *services.FirebaseService,
 ) *App {
 	return &App{
-		Cfg:          cfg,
-		KafkaService: kafkaService,
+		Cfg:             cfg,
+		KafkaService:    kafkaService,
+		UserService:     userService,
+		FirebaseService: firebaseService,
 	}
 }

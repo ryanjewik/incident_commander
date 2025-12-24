@@ -1,7 +1,6 @@
 package middleware
 
 import (
-	"context"
 	"log"
 	"net/http"
 	"strings"
@@ -13,12 +12,14 @@ import (
 type contextKey string
 
 const (
-	UserIDKey  contextKey = "user_id"
-	UserOrgKey contextKey = "user_org"
+	UserIDKey  contextKey = "userID"
+	UserOrgKey contextKey = "organizationID"
 )
 
 func AuthMiddleware(userService *services.UserService) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		log.Printf("[Auth] Method: %s, Path: %s", c.Request.Method, c.Request.URL.Path)
+
 		authHeader := c.GetHeader("Authorization")
 		if authHeader == "" {
 			log.Println("[Auth] Missing authorization header")
@@ -45,12 +46,20 @@ func AuthMiddleware(userService *services.UserService) gin.HandlerFunc {
 		}
 
 		log.Printf("[Auth] Token verified successfully for UID: %s", decodedToken.UID)
-		// Store Firebase UID - handlers can check if user exists in Firestore
-		ctx := context.WithValue(c.Request.Context(), UserIDKey, decodedToken.UID)
-		c.Request = c.Request.WithContext(ctx)
-		c.Set("user_id", decodedToken.UID)
+
+		c.Set("userID", decodedToken.UID)
+
+		log.Printf("[Auth] Context values set - userID: %s", decodedToken.UID)
+
+		testUserID, existsUser := c.Get("userID")
+		log.Printf("[Auth] Verification after c.Set - userID exists: %v (value: %v)",
+			existsUser, testUserID)
+
+		log.Printf("[Auth] Calling c.Next()...")
 
 		c.Next()
+
+		log.Printf("[Auth] After c.Next() - Response Status: %d", c.Writer.Status())
 	}
 }
 
@@ -62,7 +71,7 @@ func min(a, b int) int {
 }
 
 func GetUserID(c *gin.Context) string {
-	userID, exists := c.Get("user_id")
+	userID, exists := c.Get("userID")
 	if !exists || userID == nil {
 		return ""
 	}
@@ -70,7 +79,7 @@ func GetUserID(c *gin.Context) string {
 }
 
 func GetOrgID(c *gin.Context) string {
-	orgID, exists := c.Get("org_id")
+	orgID, exists := c.Get("organizationID")
 	if !exists || orgID == nil {
 		return ""
 	}

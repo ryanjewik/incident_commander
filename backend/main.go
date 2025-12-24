@@ -139,12 +139,13 @@ func main() {
 	defer firebaseService.Close()
 
 	userService := services.NewUserService(firebaseService)
+	incidentService := services.NewIncidentService(firebaseService)
 
-	app := handlers.NewApp(cfg)
+	app := handlers.NewApp(cfg, nil, userService, firebaseService)
 
 	r := gin.Default()
 
-	router.Register(r, app, userService)
+	router.Register(r, app, userService, incidentService, firebaseService)
 
 	log.Printf("Starting server on port %s", cfg.Port)
 	r.Run(":" + cfg.Port)

@@ -8,7 +8,7 @@ import (
 	"github.com/ryanjewik/incident_commander/backend/services"
 )
 
-func Register(r *gin.Engine, app *handlers.App, userService *services.UserService) {
+func Register(r *gin.Engine, app *handlers.App, userService *services.UserService, incidentService *services.IncidentService, firebaseService *services.FirebaseService) {
 	// Configure CORS
 	r.Use(cors.New(cors.Config{
 		AllowOrigins:     []string{"http://localhost:5173", "http://localhost:3000"},
@@ -28,11 +28,14 @@ func Register(r *gin.Engine, app *handlers.App, userService *services.UserServic
 	// Health check
 	r.GET("/health", app.Health)
 
-	// NL Query endpoint
-	r.POST("/NL_query", app.NLQuery)
-
 	// Initialize auth handler
 	authHandler := handlers.NewAuthHandler(userService)
+
+	// Initialize incident handler
+	incidentHandler := handlers.NewIncidentHandler(incidentService)
+
+	// Initialize chat handler
+	chatHandler := handlers.NewChatHandler(userService, firebaseService)
 
 	// Public routes don't need auth
 	public := r.Group("/api/auth")
@@ -61,5 +64,34 @@ func Register(r *gin.Engine, app *handlers.App, userService *services.UserServic
 		protected.DELETE("/organizations/join-requests/cleanup", authHandler.CleanupJoinRequests)
 		protected.GET("/my-organizations", authHandler.GetMyOrganizations)
 		protected.POST("/organizations/active", authHandler.SetActiveOrganization)
+	}
+
+	// Protected incident routes
+	incidents := r.Group("/api/incidents")
+	incidents.Use(middleware.AuthMiddleware(userService))
+	{
+		incidents.POST("", incidentHandler.CreateIncident)
+		incidents.GET("", incidentHandler.GetIncidents)
+		incidents.GET("/:id", incidentHandler.GetIncident)
+		incidents.PUT("/:id", incidentHandler.UpdateIncident)
+		incidents.DELETE("/:id", incidentHandler.DeleteIncident)
+	}
+
+	// Protected chat routes
+	chat := r.Group("/api/chat")
+	chat.Use(middleware.AuthMiddleware(userService))
+	{
+		chat.POST("/messages", chatHandler.SendMessage)
+		chat.GET("/messages", chatHandler.GetMessages)
+	}
+
+	// WebSocket endpoint (auth handled in handler via token query param)
+	r.GET("/api/chat/ws", chatHandler.HandleWebSocket)
+
+	// NL Query endpoint - now protected
+	nlQuery := r.Group("")
+	nlQuery.Use(middleware.AuthMiddleware(userService))
+	{
+		nlQuery.POST("/NL_query", app.NLQuery)
 	}
 }

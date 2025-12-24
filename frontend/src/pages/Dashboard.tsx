@@ -95,6 +95,24 @@ export default function Dashboard() {
     );
   };
 
+  const handleSendIncident = async (incidentId: number) => {
+    const incident = incidentData.find(i => i.id === incidentId);
+    if (!incident) return;
+
+    try {
+      await apiService.createIncident({
+        title: incident.title,
+        status: incident.status,
+        type: incident.type,
+        description: incident.description,
+      });
+      alert('Incident sent to Firestore successfully!');
+    } catch (error) {
+      console.error('Failed to send incident:', error);
+      alert('Failed to send incident to Firestore. Please try again.');
+    }
+  };
+
   const hasOrganization = userData?.organization_id && userData.organization_id !== '' && userData.organization_id !== 'default';
 
   const handleLeaveOrganization = async () => {
@@ -208,6 +226,7 @@ export default function Dashboard() {
                 incidentData={incidentData}
                 onClose={() => setSelectedIncident(null)}
                 onStatusChange={handleStatusChange}
+                onSendIncident={handleSendIncident}
               />
             </div>
           ) : (
