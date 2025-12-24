@@ -1,0 +1,61 @@
+version: '3.8'
+services:
+  dummy-app:
+    build:
+      context: ./dummy_app
+      dockerfile: Dockerfile
+    container_name: dummy-app
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - SIM_INTERVAL=15
+      - DD_SERVICE=dummy-checkout
+      - DD_ENV=demo
+      - DD_VERSION=1.0.0
+      - DD_AGENT_HOST=datadog-agent
+    ports:
+      - "8000:8000"
+    depends_on:
+      - redis
+      - datadog
+    command: ["ddtrace-run", "uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]
+    networks:
+      - dd_net
+    volumes:
+      - datadog-socket:/var/run/datadog
+
+  redis:
+    image: redis:6
+    restart: unless-stopped
+    networks:
+      - dd_net
+
+  datadog:
+    image: datadog/agent:latest
+    container_name: datadog-agent
+    environment:
+      - DD_API_KEY=${DD_API_KEY}
+      - DD_SITE=${DD_SITE}
+      - DD_APM_ENABLED=true
+      - DD_LOGS_ENABLED=true
+      - DD_LOGS_CONFIG_CONTAINER_COLLECT_ALL=true
+      - DD_DOGSTATSD_NON_LOCAL_TRAFFIC=true
+      - DD_DOGSTATSD_BIND_HOST=0.0.0.0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - datadog-socket:/var/run/datadog
+      - /proc/:/host/proc/:ro
+      - /sys/fs/cgroup/:/host/sys/fs/cgroup:ro
+    ports:
+      - "8125:8125/udp" # DogStatsD
+      - "8126:8126"     # APM trace intake
+    networks:
+      - dd_net
+
+networks:
+  dd_net:
+    driver: bridge
+
+volumes:
+  datadog-socket:
+    driver: local
