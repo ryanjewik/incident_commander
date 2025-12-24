@@ -4,7 +4,6 @@ import (
 	"log"
 
 	"github.com/gin-gonic/gin"
-	"github.com/joho/godotenv"
 
 	"github.com/ryanjewik/incident_commander/backend/config"
 	"github.com/ryanjewik/incident_commander/backend/handlers"
@@ -113,9 +112,9 @@ func consume(topic string, config kafka.ConfigMap) {
 
 func main() {
 	// Load .env file - this must come BEFORE config.Load()
-	if err := godotenv.Load(); err != nil {
-		log.Println("No .env file found, using environment variables")
-	}
+	// if err := godotenv.Load(); err != nil {
+	// 	log.Println("No .env file found, using environment variables")
+	// }
 
 	// topic := "topic_0"
 	// kafkaconfig := ReadConfig()
