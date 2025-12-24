@@ -249,7 +249,7 @@ export default function MemberManagementModal({ onClose, orgId, onBack }: Member
     setProcessingRequestId(requestId);
 
     try {
-      await apiService.approveJoinRequest(currentOrgId, requestId);
+      await apiService.approveJoinRequest(requestId);
       setSuccess('Join request approved!');
       await loadJoinRequests();
       await loadMembers();
