@@ -66,6 +66,13 @@ export interface Organization {
   created_at: string;
 }
 
+// Add DatadogSecrets type for API
+export interface DatadogSecrets {
+  apiKey: string;
+  appKey: string;
+  webhookSecret: string;
+}
+
 export interface JoinRequest {
   id: string;
   user_id: string;
@@ -434,6 +441,15 @@ export const apiService = {
   // NL Query endpoint
   nlQuery: (data: NLQueryRequest) => {
     return api.post<NLQueryResponse>('/NL_query', data).then((res: AxiosResponse<NLQueryResponse>) => {
+      return res.data;
+    });
+  },
+
+  // Add saveDatadogSecrets method (accepts secrets + optional settings payload)
+  saveDatadogSecrets: (orgId: string, secrets: any) => {
+    console.log('[API Service] Saving Datadog secrets for org:', orgId, secrets);
+    return api.post(`/api/auth/organizations/${orgId}/datadog-secrets`, secrets).then((res: AxiosResponse) => {
+      console.log('[API Service] Datadog secrets saved:', res.data);
       return res.data;
     });
   },

@@ -117,13 +117,13 @@ func main() {
 		log.Println("No .env file found, using environment variables")
 	}
 
-	topic := "topic_0"
-	kafkaconfig := ReadConfig()
+	// topic := "topic_0"
+	// kafkaconfig := ReadConfig()
 
-	go produce(topic, kafkaconfig)
+	// go produce(topic, kafkaconfig)
 
-	// Run consumer in a goroutine so it doesn't block the server
-	go consume(topic, kafkaconfig)
+	// // Run consumer in a goroutine so it doesn't block the server
+	// go consume(topic, kafkaconfig)
 
 	cfg := config.Load()
 

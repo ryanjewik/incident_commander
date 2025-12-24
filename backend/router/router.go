@@ -64,6 +64,7 @@ func Register(r *gin.Engine, app *handlers.App, userService *services.UserServic
 		protected.DELETE("/organizations/join-requests/cleanup", authHandler.CleanupJoinRequests)
 		protected.GET("/my-organizations", authHandler.GetMyOrganizations)
 		protected.POST("/organizations/active", authHandler.SetActiveOrganization)
+		protected.POST("/organizations/:orgId/datadog-secrets", authHandler.SaveDatadogSecrets)
 	}
 
 	// Protected incident routes

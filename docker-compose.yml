@@ -55,6 +55,8 @@ services:
       - PKG_CONFIG_PATH=/usr/lib/pkgconfig
     env_file:
       - .env
+    volumes:
+      - ./backend/firebase-service-account.json:/root/backend/firebase-service-account.json:ro
     networks:
       - dd_net
 networks:

@@ -4,10 +4,12 @@ go 1.25.3
 
 require (
 	cloud.google.com/go/firestore v1.20.0
+	cloud.google.com/go/kms v1.23.2
 	firebase.google.com/go/v4 v4.18.0
 	github.com/confluentinc/confluent-kafka-go/v2 v2.12.0
 	github.com/gin-contrib/cors v1.7.6
 	github.com/gin-gonic/gin v1.11.0
+	golang.org/x/crypto v0.46.0
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.0
 	github.com/joho/godotenv v1.5.1
@@ -76,7 +78,6 @@ require (
 	go.opentelemetry.io/otel/trace v1.38.0 // indirect
 	go.uber.org/mock v0.6.0 // indirect
 	golang.org/x/arch v0.23.0 // indirect
-	golang.org/x/crypto v0.46.0 // indirect
 	golang.org/x/net v0.48.0 // indirect
 	golang.org/x/oauth2 v0.34.0 // indirect
 	golang.org/x/sync v0.19.0 // indirect

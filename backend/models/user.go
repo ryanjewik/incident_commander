@@ -15,9 +15,11 @@ type User struct {
 }
 
 type Organization struct {
-	ID        string    `firestore:"-" json:"id"`
-	Name      string    `firestore:"name" json:"name"`
-	CreatedAt time.Time `firestore:"created_at" json:"created_at"`
+	ID              string                 `firestore:"-" json:"id"`
+	Name            string                 `firestore:"name" json:"name"`
+	CreatedAt       time.Time              `firestore:"created_at" json:"created_at"`
+	DatadogSettings map[string]interface{} `firestore:"datadog_settings" json:"datadog_settings,omitempty"`
+	DatadogSecrets  map[string]interface{} `firestore:"datadog_secrets" json:"datadog_secrets,omitempty"`
 }
 
 type JoinRequest struct {
