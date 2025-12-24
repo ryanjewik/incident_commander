@@ -303,7 +303,12 @@ export const apiService = {
     });
   },
   
-  getOrgUsers: () => {
+  getOrgUsers: (orgId?: string) => {
+    if (orgId) {
+      return api.get<User[]>(`/api/auth/organizations/${orgId}/users`).then((res: AxiosResponse<User[]>) => {
+        return res.data;
+      });
+    }
     return api.get<User[]>('/api/auth/users').then((res: AxiosResponse<User[]>) => {
       return res.data;
     });
@@ -357,7 +362,13 @@ export const apiService = {
     });
   },
 
-  approveJoinRequest: (requestId: string) => {
+  approveJoinRequest: (requestId: string, orgId?: string) => {
+    // If orgId provided, use the org-scoped endpoint, otherwise use legacy endpoint
+    if (orgId) {
+      return api.put(`/api/auth/organizations/${orgId}/join-requests/${requestId}/approve`).then((res: AxiosResponse) => {
+        return res.data;
+      });
+    }
     return api.put(`/api/auth/organizations/join-requests/${requestId}/approve`).then((res: AxiosResponse) => {
       return res.data;
     });
