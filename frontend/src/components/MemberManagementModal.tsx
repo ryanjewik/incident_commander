@@ -42,32 +42,32 @@ export default function MemberManagementModal({ onClose, orgId, onBack }: Member
     setOrganization(null);
     setLoadingOrg(true);
     setIsAdmin(false);
-    
+
     loadMembers();
     loadOrganization();
   }, [currentOrgId]);
 
+  // Always load join requests for admins after admin status/org is determined
+  useEffect(() => {
+    if (isAdmin && currentOrgId) {
+      setLoadingRequests(true);
+      loadJoinRequests();
+    } else {
+      setJoinRequests([]);
+      setLoadingRequests(false);
+    }
+  }, [isAdmin, currentOrgId]);
+
   const loadMembers = async () => {
     try {
       setLoadingMembers(true);
-      // Ensure backend uses the selected org when viewing via org list
-      if (currentOrgId && currentOrgId !== userData?.organization_id) {
-        console.log('[MemberManagementModal] Switching to org:', currentOrgId);
-        await apiService.setActiveOrganization(currentOrgId);
-      }
       console.log('[MemberManagementModal] Loading members for org:', currentOrgId);
-      const data = await apiService.getOrgUsers();
+      const data = await apiService.getOrgUsers(currentOrgId);
       console.log('[MemberManagementModal] Members loaded:', data);
       setMembers(data || []);
       // Determine admin based on membership role for this org
       const self = data?.find(m => m.id === userData?.id);
       setIsAdmin(self?.role === 'admin');
-      if (self?.role === 'admin') {
-        loadJoinRequests();
-      } else {
-        setJoinRequests([]);
-        setLoadingRequests(false);
-      }
     } catch (err) {
       console.error('Failed to load members:', err);
       setMembers([]);
@@ -80,7 +80,14 @@ export default function MemberManagementModal({ onClose, orgId, onBack }: Member
 
   const loadJoinRequests = async () => {
     try {
-      const requests = await apiService.getJoinRequests();
+      let requests: JoinRequest[] = [];
+      if (isAdmin && currentOrgId) {
+        // Fetch join requests for the organization (not the user's own requests)
+        requests = await apiService.getOrgJoinRequests(currentOrgId);
+      } else {
+        // Fallback: fetch user's own requests (should not be shown for admin)
+        requests = await apiService.getJoinRequests();
+      }
       setJoinRequests(requests || []);
     } catch (err) {
       console.error('Failed to load join requests:', err);
@@ -109,7 +116,7 @@ export default function MemberManagementModal({ onClose, orgId, onBack }: Member
     setProcessingRequestId(requestId);
 
     try {
-      await apiService.approveJoinRequest(requestId);
+      await apiService.approveJoinRequest(currentOrgId, requestId);
       setSuccess('Join request approved!');
       await loadJoinRequests();
       await loadMembers();
@@ -201,14 +208,14 @@ export default function MemberManagementModal({ onClose, orgId, onBack }: Member
   };
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+    <div className="fixed inset-0 flex items-center justify-center z-50" style={{ background: 'rgba(0,0,0,0.4)', backdropFilter: 'blur(2px)' }}>
       <div className="bg-white p-8 rounded-lg shadow-2xl w-[600px] max-h-[80vh] overflow-y-auto">
         <div className="mb-4">
           <div className="flex items-center gap-3 mb-2">
             {onBack && (
               <button
                 onClick={onBack}
-                className="text-gray-600 hover:text-gray-800 transition-colors"
+                className="text-white hover:text-gray-800 transition-colors"
                 title="Back to Organizations"
               >
                 <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -288,7 +295,7 @@ export default function MemberManagementModal({ onClose, orgId, onBack }: Member
               <button
                 type="button"
                 onClick={handleCleanupRequests}
-                className="px-3 py-1 text-xs bg-gray-200 text-gray-800 rounded hover:bg-gray-300"
+                className="px-3 py-1 text-xs bg-gray-200 text-gray-800 rounded hover:bg-gray-300 text-white"
               >
                 Clean up legacy
               </button>
@@ -352,10 +359,10 @@ export default function MemberManagementModal({ onClose, orgId, onBack }: Member
                   className="flex items-center justify-between p-3 bg-gray-50 rounded-md"
                 >
                   <div className="flex-1">
-                    <p className="font-medium text-gray-800">
+                    <p className="font-medium text-gray-800 text-left">
                       {member.first_name} {member.last_name}
                     </p>
-                    <p className="text-sm text-gray-600">{member.email}</p>
+                    <p className="text-sm text-gray-600 text-left">{member.email}</p>
                   </div>
                   <div className="flex items-center gap-2">
                     <span className={`px-3 py-1 rounded-full text-xs font-semibold ${
@@ -410,14 +417,14 @@ export default function MemberManagementModal({ onClose, orgId, onBack }: Member
 
         <button
           onClick={onClose}
-          className="mt-4 w-full bg-gray-300 text-gray-700 py-2 rounded-md hover:bg-gray-400 font-medium"
+          className="mt-4 w-full bg-gray-300 text-white py-2 rounded-md hover:bg-gray-400 font-medium"
         >
           Close
         </button>
       </div>
 
       {showLeaveConfirm && (
-        <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-60">
+        <div className="fixed inset-0 flex items-center justify-center z-60" style={{ background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(2px)' }}>
           <div className="bg-white p-8 rounded-lg shadow-2xl max-w-md">
             <h2 className="text-2xl font-bold text-gray-800 mb-4">Leave Organization?</h2>
             <p className="text-gray-600 mb-6">
