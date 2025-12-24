@@ -110,13 +110,13 @@ func consume(topic string, config kafka.ConfigMap) {
 
 func main() {
 
-	topic := "topic_0"
-	kafkaconfig := ReadConfig()
+	// topic := "topic_0"
+	// kafkaconfig := ReadConfig()
 
-	go produce(topic, kafkaconfig)
+	// go produce(topic, kafkaconfig)
 
-	// Run consumer in a goroutine so it doesn't block the server
-	go consume(topic, kafkaconfig)
+	// // Run consumer in a goroutine so it doesn't block the server
+	// go consume(topic, kafkaconfig)
 
 	cfg := config.Load()
 

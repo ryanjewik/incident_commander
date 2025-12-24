@@ -683,3 +683,84 @@ func (h *AuthHandler) GetOrgJoinRequests(c *gin.Context) {
 
 	c.JSON(http.StatusOK, requests)
 }
+
+// SaveDatadogSecrets saves masked Datadog secrets and dashboard settings for an organization.
+func (h *AuthHandler) SaveDatadogSecrets(c *gin.Context) {
+	userID := middleware.GetUserID(c)
+	orgID := c.Param("orgId")
+
+	// Parse incoming payload (allow flexible shape)
+	var payload map[string]interface{}
+	if err := c.ShouldBindJSON(&payload); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	ctx := c.Request.Context()
+
+	// Ensure caller is admin of the target org
+	membership, err := h.userService.GetMembership(ctx, userID, orgID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if membership == nil || membership.Role != "admin" {
+		c.JSON(http.StatusForbidden, gin.H{"error": "only admins can update organization secrets"})
+		return
+	}
+
+	// Extract secrets and settings from payload
+	var secrets map[string]interface{}
+	var settings map[string]interface{}
+	// Prefer `secrets` object if provided
+	if v, ok := payload["secrets"]; ok {
+		if s, ok2 := v.(map[string]interface{}); ok2 {
+			secrets = s
+		}
+	}
+	// backward compatibility: allow top-level fields, but only if any are present
+	if secrets == nil {
+		// only create secrets map if top-level keys are present
+		hasAny := false
+		tmp := map[string]interface{}{}
+		if v, ok := payload["apiKey"]; ok {
+			tmp["apiKey"] = v
+			hasAny = true
+		}
+		if v, ok := payload["appKey"]; ok {
+			tmp["appKey"] = v
+			hasAny = true
+		}
+		if v, ok := payload["webhookSecret"]; ok {
+			tmp["webhookSecret"] = v
+			hasAny = true
+		}
+		if hasAny {
+			secrets = tmp
+		}
+	}
+
+	if v, ok := payload["settings"]; ok {
+		if s, ok2 := v.(map[string]interface{}); ok2 {
+			settings = s
+		}
+	}
+	if settings == nil {
+		settings = map[string]interface{}{}
+		// copy known toggles if present
+		for _, k := range []string{"systemMetrics", "alertStatus", "activityFeed", "securitySignals", "liveLogs"} {
+			if val, ok := payload[k]; ok {
+				settings[k] = val
+			}
+		}
+	}
+
+	// Save to organization document. Pass the original secrets only when provided
+	// so the service can perform encryption/hashing and not accidentally clear values.
+	if err := h.userService.UpdateOrganizationDatadog(ctx, orgID, secrets, settings); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "datadog secrets saved"})
+}

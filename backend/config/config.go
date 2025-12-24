@@ -9,6 +9,7 @@ type Config struct {
 	DataDog_API_KEY         string
 	DataDog_SITE            string
 	DataDog_AGENT_HOST      string
+	KMSCryptoKey            string
 	FirebaseProjectID       string
 	FirebaseCredentialsPath string
 	Port                    string
@@ -22,6 +23,7 @@ func Load() Config {
 		DataDog_API_KEY:         os.Getenv("DD_API_KEY"),
 		DataDog_SITE:            os.Getenv("DD_SITE"),
 		DataDog_AGENT_HOST:      os.Getenv("DD_AGENT_HOST"),
+		KMSCryptoKey:            os.Getenv("KMS_CRYPTO_KEY"),
 		FirebaseProjectID:       os.Getenv("FIREBASE_PROJECT_ID"),
 		FirebaseCredentialsPath: os.Getenv("FIREBASE_CREDENTIALS_PATH"),
 		Port:                    os.Getenv("PORT"),

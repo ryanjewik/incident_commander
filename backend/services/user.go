@@ -3,6 +3,8 @@ package services
 import (
 	"context"
 	"errors"
+	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -373,6 +375,83 @@ func (us *UserService) SearchOrganizations(ctx context.Context, query string) ([
 	}
 
 	return organizations, nil
+}
+
+// UpdateOrganizationDatadog updates the organization document with datadog secrets (masked) and settings
+func (us *UserService) UpdateOrganizationDatadog(ctx context.Context, orgID string, secrets map[string]interface{}, settings map[string]interface{}) error {
+	// Build per-field updates so we don't accidentally wipe existing values when keys are omitted
+	updates := make([]firestore.Update, 0)
+
+	if secrets != nil {
+		// Handle webhookSecret: hash and store the hash only when provided and non-empty
+		if wsRaw, ok := secrets["webhookSecret"]; ok {
+			if ws, ok2 := wsRaw.(string); ok2 && strings.TrimSpace(ws) != "" {
+				hashed, err := HashWebhookSecret(ws)
+				if err != nil {
+					log.Printf("HashWebhookSecret error: %v", err)
+					return err
+				}
+				updates = append(updates, firestore.Update{Path: "datadog_secrets.webhookSecret", Value: hashed})
+			}
+		}
+
+		// If both apiKey and appKey are provided and non-empty, encrypt them before saving
+		apiRaw, apiOk := secrets["apiKey"]
+		appRaw, appOk := secrets["appKey"]
+		if apiOk && appOk {
+			if apiKey, ok1 := apiRaw.(string); ok1 {
+				if appKey, ok2 := appRaw.(string); ok2 {
+					if strings.TrimSpace(apiKey) != "" && strings.TrimSpace(appKey) != "" {
+						encryptedApiKey, encryptedAppKey, encryptedDek, err := EncryptData(apiKey, appKey)
+						if err != nil {
+							log.Printf("EncryptData error: %v", err)
+							return err
+						}
+						// store encrypted blobs and wrapped DEK as nested fields
+						updates = append(updates,
+							firestore.Update{Path: "datadog_secrets.encrypted_apiKey", Value: encryptedApiKey},
+							firestore.Update{Path: "datadog_secrets.encrypted_appKey", Value: encryptedAppKey},
+							firestore.Update{Path: "datadog_secrets.encrypted_apiKeyDek", Value: encryptedDek},
+						)
+					}
+				}
+			}
+		}
+	}
+
+	// Apply settings per-field to avoid replacing the map unintentionally
+	if settings != nil {
+		toggleKeys := []string{"systemMetrics", "alertStatus", "activityFeed", "securitySignals", "liveLogs"}
+		for _, k := range toggleKeys {
+			if v, ok := settings[k]; ok {
+				// coerce to bool when possible
+				b := false
+				switch t := v.(type) {
+				case bool:
+					b = t
+				case *bool:
+					if t != nil {
+						b = *t
+					}
+				case string:
+					b = strings.ToLower(t) == "true"
+				case float64:
+					b = t != 0
+				default:
+					// keep b false
+				}
+				updates = append(updates, firestore.Update{Path: fmt.Sprintf("datadog_settings.%s", k), Value: b})
+			}
+		}
+	}
+
+	if len(updates) == 0 {
+		// nothing to update
+		return nil
+	}
+
+	_, err := us.fs.Firestore.Collection("organizations").Doc(orgID).Update(ctx, updates)
+	return err
 }
 
 func (us *UserService) CreateJoinRequest(ctx context.Context, userID, organizationID string) (*models.JoinRequest, error) {

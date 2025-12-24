@@ -4,6 +4,52 @@ import { useAuth } from '../contexts/AuthContext';
 import { apiService } from '../services/api';
 import type { User, JoinRequest, Organization } from '../services/api';
 
+// Add types for Datadog secrets
+interface DatadogSecrets {
+  apiKey?: string;
+  appKey?: string;
+  webhookSecret?: string;
+  // encrypted blobs returned from backend (optional)
+  encrypted_apiKey?: string;
+  encrypted_appKey?: string;
+  encrypted_apiKeyDek?: string;
+}
+
+interface DatadogSettings {
+  systemMetrics: boolean;
+  alertStatus: boolean;
+  activityFeed: boolean;
+  securitySignals: boolean;
+  liveLogs: boolean;
+}
+// Extend Organization type to include optional datadog_secrets
+interface OrganizationWithDatadog extends Organization {
+  datadog_secrets?: DatadogSecrets;
+  datadog_settings?: DatadogSettings;
+}
+
+// Simple Toggle component
+function Toggle({ label, checked, onChange, disabled }: { label: string; checked: boolean; onChange: (v: boolean) => void; disabled?: boolean }) {
+  return (
+    <label className="flex items-center justify-between bg-transparent px-1 py-1">
+      <span className="text-sm text-gray-800">{label}</span>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={checked}
+        disabled={disabled}
+        onClick={() => !disabled && onChange(!checked)}
+        className={`relative inline-flex items-center h-8 w-14 rounded-full transition-colors duration-250 ease-in-out focus:outline-none focus:ring-2 focus:ring-offset-2 ${checked ? 'bg-gradient-to-r from-purple-600 to-pink-500 shadow-md' : 'bg-gray-300'} ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`}
+      >
+        {/* sliding knob */}
+        <span className={`absolute left-1 top-1 w-6 h-6 bg-white rounded-full shadow transform transition-transform duration-300 ease-in-out ${checked ? 'translate-x-6 rotate-[12deg]' : 'translate-x-0 rotate-0'}`} />
+        {/* subtle glow when on */}
+        <span className={`absolute -left-1 top-0 bottom-0 w-3 rounded-full transition-opacity duration-300 ${checked ? 'opacity-30 bg-pink-400 blur-sm' : 'opacity-0'}`} />
+      </button>
+    </label>
+  );
+}
+
 interface MemberManagementModalProps {
   onClose: () => void;
   orgId?: string; // Optional: if provided, show this org instead of active org
@@ -25,10 +71,25 @@ export default function MemberManagementModal({ onClose, orgId, onBack }: Member
   const [joinRequests, setJoinRequests] = useState<JoinRequest[]>([]);
   const [loadingRequests, setLoadingRequests] = useState(true);
   const [processingRequestId, setProcessingRequestId] = useState<string | null>(null);
-  const [organization, setOrganization] = useState<Organization | null>(null);
+  const [organization, setOrganization] = useState<OrganizationWithDatadog | null>(null);
   const [loadingOrg, setLoadingOrg] = useState(true);
   const { addMember, removeMember, leaveOrganization, userData } = useAuth();
   const [isAdmin, setIsAdmin] = useState(false);
+  // Datadog secrets state
+  const [datadogSecrets, setDatadogSecrets] = useState<DatadogSecrets>({
+    apiKey: '',
+    appKey: '',
+    webhookSecret: '',
+  });
+  const [savingSecrets, setSavingSecrets] = useState(false);
+  const [datadogSettings, setDatadogSettings] = useState<DatadogSettings>({
+    systemMetrics: false,
+    alertStatus: false,
+    activityFeed: false,
+    securitySignals: false,
+    liveLogs: false,
+  });
+  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   
   // Use provided orgId or fallback to user's active organization
   const currentOrgId = orgId || userData?.organization_id || '';
@@ -58,15 +119,67 @@ export default function MemberManagementModal({ onClose, orgId, onBack }: Member
     }
   }, [isAdmin, currentOrgId]);
 
+  const loadOrganization = async () => {
+    try {
+      const orgs = await apiService.searchOrganizations('');
+      const userOrg = orgs.find((org: Organization) => org.id === currentOrgId);
+      setOrganization(userOrg || null);
+      // Optionally, load existing Datadog secrets for this org if available
+      const orgWithDatadog = userOrg as OrganizationWithDatadog;
+      console.debug('[MemberManagementModal] loaded org:', orgWithDatadog);
+      if (orgWithDatadog) {
+        // load secrets if present
+        if (orgWithDatadog.datadog_secrets) {
+          // If any secret is present in the stored object, show masked placeholders for all three
+          const hasApiEnc = !!orgWithDatadog.datadog_secrets.encrypted_apiKey || !!orgWithDatadog.datadog_secrets.apiKey || false;
+          const hasAppEnc = !!orgWithDatadog.datadog_secrets.encrypted_appKey || !!orgWithDatadog.datadog_secrets.appKey || false;
+          const hasWebhook = !!orgWithDatadog.datadog_secrets.webhookSecret || false;
+          if (hasApiEnc || hasAppEnc || hasWebhook) {
+            setDatadogSecrets({ apiKey: '********', appKey: '********', webhookSecret: '********' });
+          } else {
+            setDatadogSecrets({ apiKey: '', appKey: '', webhookSecret: '' });
+          }
+        } else {
+          setDatadogSecrets({ apiKey: '', appKey: '', webhookSecret: '' });
+        }
+
+        // load settings independently of secrets presence
+        if (orgWithDatadog.datadog_settings) {
+          const toBool = (v: any) => {
+            if (typeof v === 'boolean') return v;
+            if (typeof v === 'string') return v.toLowerCase() === 'true';
+            if (typeof v === 'number') return v !== 0;
+            return false;
+          };
+          setDatadogSettings({
+            systemMetrics: toBool(orgWithDatadog.datadog_settings.systemMetrics),
+            alertStatus: toBool(orgWithDatadog.datadog_settings.alertStatus),
+            activityFeed: toBool(orgWithDatadog.datadog_settings.activityFeed),
+            securitySignals: toBool(orgWithDatadog.datadog_settings.securitySignals),
+            liveLogs: toBool(orgWithDatadog.datadog_settings.liveLogs),
+          });
+        } else {
+          setDatadogSettings({ systemMetrics: false, alertStatus: false, activityFeed: false, securitySignals: false, liveLogs: false });
+        }
+      } else {
+        // No stored datadog config — keep inputs empty and toggles at their initial (false) state
+        setDatadogSecrets({ apiKey: '', appKey: '', webhookSecret: '' });
+        setDatadogSettings({ systemMetrics: false, alertStatus: false, activityFeed: false, securitySignals: false, liveLogs: false });
+      }
+    } catch (err) {
+      console.error('Failed to load organization:', err);
+      setOrganization(null);
+    } finally {
+      setLoadingOrg(false);
+    }
+  };
+
   const loadMembers = async () => {
     try {
       setLoadingMembers(true);
-      console.log('[MemberManagementModal] Loading members for org:', currentOrgId);
       const data = await apiService.getOrgUsers(currentOrgId);
-      console.log('[MemberManagementModal] Members loaded:', data);
       setMembers(data || []);
-      // Determine admin based on membership role for this org
-      const self = data?.find(m => m.id === userData?.id);
+      const self = data?.find((m: User) => m.id === userData?.id);
       setIsAdmin(self?.role === 'admin');
     } catch (err) {
       console.error('Failed to load members:', err);
@@ -82,10 +195,8 @@ export default function MemberManagementModal({ onClose, orgId, onBack }: Member
     try {
       let requests: JoinRequest[] = [];
       if (isAdmin && currentOrgId) {
-        // Fetch join requests for the organization (not the user's own requests)
         requests = await apiService.getOrgJoinRequests(currentOrgId);
       } else {
-        // Fallback: fetch user's own requests (should not be shown for admin)
         requests = await apiService.getJoinRequests();
       }
       setJoinRequests(requests || []);
@@ -97,18 +208,40 @@ export default function MemberManagementModal({ onClose, orgId, onBack }: Member
     }
   };
 
-  const loadOrganization = async () => {
+  // Save Datadog secrets handler (move to component scope)
+  const handleSaveDatadogSecrets = async () => {
+    setError('');
+    setSuccess('');
+    setSavingSecrets(true);
     try {
-      const orgs = await apiService.searchOrganizations('');
-      const userOrg = orgs.find((org: Organization) => org.id === currentOrgId);
-      setOrganization(userOrg || null);
-    } catch (err) {
-      console.error('Failed to load organization:', err);
-      setOrganization(null);
+      // Build payload: include settings always, but only include keys/secrets when user provided
+      // This prevents overwriting existing encrypted values with empty strings when adjusting toggles
+      const payload: any = { settings: datadogSettings };
+      const apiKey = datadogSecrets.apiKey?.trim();
+      const appKey = datadogSecrets.appKey?.trim();
+      const webhookSecret = datadogSecrets.webhookSecret?.trim();
+      // If input is non-empty and not the masked placeholder, include it
+      if (apiKey && apiKey !== '********') payload.apiKey = apiKey;
+      if (appKey && appKey !== '********') payload.appKey = appKey;
+      if (webhookSecret && webhookSecret !== '********') payload.webhookSecret = webhookSecret;
+
+      await apiService.saveDatadogSecrets(currentOrgId, payload as any);
+      setSuccess('Datadog secrets and settings saved successfully!');
+      setToast({ message: 'Datadog settings saved', type: 'success' });
+    } catch (err: any) {
+      setError(err.response?.data?.error || err.message || 'Failed to save Datadog secrets');
+      setToast({ message: 'Failed to save Datadog settings', type: 'error' });
     } finally {
-      setLoadingOrg(false);
+      setSavingSecrets(false);
     }
   };
+
+  // auto-hide toast
+  useEffect(() => {
+    if (!toast) return;
+    const id = setTimeout(() => setToast(null), 3000);
+    return () => clearTimeout(id);
+  }, [toast]);
 
   const handleApproveRequest = async (requestId: string) => {
     setError('');
@@ -249,43 +382,101 @@ export default function MemberManagementModal({ onClose, orgId, onBack }: Member
         )}
 
         {isAdmin && (
-          <form onSubmit={handleSubmit} className="space-y-4 mb-6">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Member Email
-              </label>
-              <input
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                required
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
-                placeholder="user@example.com"
-              />
+          <>
+            <div className="border-t pt-4 mb-6">
+              <h3 className="text-lg font-semibold text-gray-800 mb-3">Datadog Integration</h3>
+              <div className="space-y-3">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Datadog API Key</label>
+                  <input
+                    type="password"
+                    value={datadogSecrets.apiKey}
+                    onChange={e => setDatadogSecrets(s => ({ ...s, apiKey: e.target.value }))}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                    placeholder="********"
+                    autoComplete="off"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Datadog APP Key</label>
+                  <input
+                    type="password"
+                    value={datadogSecrets.appKey}
+                    onChange={e => setDatadogSecrets(s => ({ ...s, appKey: e.target.value }))}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                    placeholder="********"
+                    autoComplete="off"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Webhook Secret</label>
+                  <input
+                    type="password"
+                    value={datadogSecrets.webhookSecret}
+                    onChange={e => setDatadogSecrets(s => ({ ...s, webhookSecret: e.target.value }))}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                    placeholder="********"
+                    autoComplete="off"
+                  />
+                </div>
+                <div className="pt-2">
+                  <h4 className="text-sm font-medium text-gray-800 mb-2">Dashboard Toggles</h4>
+                  <div className="grid grid-cols-1 gap-3">
+                    <Toggle label="System Metrics" checked={datadogSettings.systemMetrics} onChange={v => setDatadogSettings(s => ({ ...s, systemMetrics: v }))} disabled={loadingOrg} />
+                    <Toggle label="Alert Status" checked={datadogSettings.alertStatus} onChange={v => setDatadogSettings(s => ({ ...s, alertStatus: v }))} disabled={loadingOrg} />
+                    <Toggle label="Activity Feed" checked={datadogSettings.activityFeed} onChange={v => setDatadogSettings(s => ({ ...s, activityFeed: v }))} disabled={loadingOrg} />
+                    <Toggle label="Security Signals" checked={datadogSettings.securitySignals} onChange={v => setDatadogSettings(s => ({ ...s, securitySignals: v }))} disabled={loadingOrg} />
+                    <Toggle label="Live Logs" checked={datadogSettings.liveLogs} onChange={v => setDatadogSettings(s => ({ ...s, liveLogs: v }))} disabled={loadingOrg} />
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleSaveDatadogSecrets}
+                  disabled={savingSecrets}
+                  className="w-full bg-gradient-to-r from-purple-600 to-pink-600 text-white py-2 rounded-md hover:from-purple-700 hover:to-pink-700 disabled:opacity-50 font-medium"
+                >
+                  {savingSecrets ? 'Saving...' : 'Save Datadog Secrets'}
+                </button>
+              </div>
             </div>
+            <form onSubmit={handleSubmit} className="space-y-4 mb-6">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Member Email
+                </label>
+                <input
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  required
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                  placeholder="user@example.com"
+                />
+              </div>
 
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Role
-              </label>
-              <select
-                value={role}
-                onChange={(e) => setRole(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Role
+                </label>
+                <select
+                  value={role}
+                  onChange={(e) => setRole(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                >
+                  <option value="member">Member</option>
+                  <option value="admin">Admin</option>
+                </select>
+              </div>
+
+              <button
+                type="submit"
+                disabled={loading}
+                className="w-full bg-gradient-to-r from-purple-600 to-pink-600 text-white py-2 rounded-md hover:from-purple-700 hover:to-pink-700 disabled:opacity-50 font-medium"
               >
-                <option value="member">Member</option>
-                <option value="admin">Admin</option>
-              </select>
-            </div>
-
-            <button
-              type="submit"
-              disabled={loading}
-              className="w-full bg-gradient-to-r from-purple-600 to-pink-600 text-white py-2 rounded-md hover:from-purple-700 hover:to-pink-700 disabled:opacity-50 font-medium"
-            >
-              {loading ? 'Adding...' : 'Add Member'}
-            </button>
-          </form>
+                {loading ? 'Adding...' : 'Add Member'}
+              </button>
+            </form>
+          </>
         )}
 
         {isAdmin && (
@@ -446,6 +637,13 @@ export default function MemberManagementModal({ onClose, orgId, onBack }: Member
                 Cancel
               </button>
             </div>
+          </div>
+        </div>
+      )}
+      {toast && (
+        <div className="fixed top-6 right-6 z-60">
+          <div className={`${toast?.type === 'success' ? 'bg-green-600' : 'bg-red-600'} text-white px-4 py-2 rounded shadow-md`}>
+            {toast?.message}
           </div>
         </div>
       )}
