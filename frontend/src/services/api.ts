@@ -1,10 +1,10 @@
 import axios, { AxiosError, AxiosHeaders } from 'axios';
-import type { AxiosResponse, InternalAxiosRequestConfig } from 'axios';
+import type { AxiosResponse } from 'axios';
+import type { InternalAxiosRequestConfig } from 'axios';
 import { auth } from '../config/firebase';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8080';
-
-console.log('[API] Initializing with base URL:', API_URL);
+const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:8080';
 
 const api = axios.create({
   baseURL: API_URL,
@@ -14,14 +14,10 @@ const api = axios.create({
 });
 
 api.interceptors.request.use(async (config: InternalAxiosRequestConfig) => {
-  console.log('[API] Request to:', config.url);
   const user = auth.currentUser;
-  console.log('[API] Current user exists:', !!user);
   if (user) {
     try {
-      console.log('[API] Getting ID token with forceRefresh=false');
       const token = await user.getIdToken(false);
-      console.log('[API] Token obtained, length:', token.length);
       if (!config.headers) {
         config.headers = new AxiosHeaders();
       }
@@ -30,33 +26,24 @@ api.interceptors.request.use(async (config: InternalAxiosRequestConfig) => {
     } catch (error) {
       console.error('[API] Failed to get ID token:', error);
     }
-  } else {
-    console.log('[API] No current user, skipping token');
   }
   return config;
 });
 
 api.interceptors.response.use(
   (response: AxiosResponse) => {
-    console.log('[API] Response from:', response.config.url, 'Status:', response.status);
     return response;
   },
   async (error: AxiosError) => {
-    console.error('[API] Response error from:', error.config?.url);
-    console.error('[API] Error status:', error.response?.status);
-    console.error('[API] Error data:', error.response?.data);
+    console.error('[API] Response error:', error.response?.status);
     
     if (error.response?.status === 401) {
       const currentPath = window.location.pathname;
-      console.log('[API] 401 error, current path:', currentPath);
       
       // Only sign out if we're not on auth pages
       // Let the caller (AuthContext) handle the error appropriately
       if (currentPath !== '/login' && currentPath !== '/signup') {
-        console.log('[API] 401 on protected route - signing out user');
         await auth.signOut();
-      } else {
-        console.log('[API] 401 on auth page, letting caller handle it');
       }
     }
     return Promise.reject(error);
@@ -91,139 +78,362 @@ export interface JoinRequest {
   updated_at: string;
 }
 
+export interface Incident {
+  id: string;
+  organization_id: string;
+  title: string;
+  status: string;
+  date: string;
+  type: string;
+  description: string;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+  metadata?: Record<string, any>;
+}
+
+export interface CreateIncidentRequest {
+  title: string;
+  status?: string;
+  type: string;
+  description: string;
+  metadata?: Record<string, any>;
+}
+
+export interface UpdateIncidentRequest {
+  title?: string;
+  status?: string;
+  description?: string;
+  metadata?: Record<string, any>;
+}
+
+export interface Message {
+  id: string;
+  organization_id: string;
+  incident_id: string;
+  user_id: string;
+  user_name: string;
+  text: string;
+  mentions_bot: boolean;
+  created_at: string;
+}
+
+export interface SendMessageRequest {
+  text: string;
+  incident_id?: string;
+}
+
+export interface NLQueryRequest {
+  message: string;
+  incident_id?: string;
+  incident_data?: Record<string, any>;
+}
+
+export interface NLQueryResponse {
+  response: string;
+  success: boolean;
+  incident_id?: string;
+}
+
+// WebSocket connection manager
+class WebSocketManager {
+  private ws: WebSocket | null = null;
+  private reconnectAttempts = 0;
+  private maxReconnectAttempts = 5;
+  private reconnectDelay = 1000;
+  private messageHandlers: Set<(message: Message) => void> = new Set();
+  private connectionHandlers: Set<(connected: boolean) => void> = new Set();
+  private shouldReconnect = true;
+  private reconnectTimeout: number | null = null;
+  private pingInterval: number | null = null;
+
+  async connect(): Promise<void> {
+    // Clear any existing connection first
+    if (this.ws) {
+      this.shouldReconnect = false;
+      this.ws.close();
+      this.ws = null;
+      await new Promise(resolve => setTimeout(resolve, 100)); // Brief delay
+    }
+
+    this.shouldReconnect = true;
+
+    const user = auth.currentUser;
+    if (!user) {
+      throw new Error('User not authenticated');
+    }
+
+    const token = await user.getIdToken(false);
+    const wsUrl = `${WS_URL}/api/chat/ws?token=${token}`;
+
+    return new Promise((resolve, reject) => {
+      this.ws = new WebSocket(wsUrl);
+
+      this.ws.onopen = () => {
+        this.reconnectAttempts = 0;
+        this.connectionHandlers.forEach(handler => handler(true));
+        
+        // Start ping interval
+        this.startPingInterval();
+        
+        resolve();
+      };
+
+      this.ws.onmessage = (event) => {
+        try {
+          const message = JSON.parse(event.data) as Message;
+          this.messageHandlers.forEach(handler => handler(message));
+        } catch (error) {
+          console.error('[WebSocketManager] Failed to parse message:', error);
+        }
+      };
+
+      this.ws.onerror = (error) => {
+        console.error('[WebSocketManager] Error:', error);
+        reject(error);
+      };
+
+      this.ws.onclose = () => {
+        this.stopPingInterval();
+        this.connectionHandlers.forEach(handler => handler(false));
+        
+        if (this.shouldReconnect) {
+          this.attemptReconnect();
+        }
+      };
+    });
+  }
+
+  private startPingInterval(): void {
+    this.stopPingInterval();
+    
+    // Send ping every 25 seconds (server expects pong within 60s)
+    this.pingInterval = window.setInterval(() => {
+      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+        // WebSocket ping/pong is handled automatically by browser
+      }
+    }, 25000);
+  }
+
+  private stopPingInterval(): void {
+    if (this.pingInterval !== null) {
+      clearInterval(this.pingInterval);
+      this.pingInterval = null;
+    }
+  }
+
+  private attemptReconnect(): void {
+    if (!this.shouldReconnect) {
+      return;
+    }
+
+    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
+      console.log('[WebSocketManager] Max reconnection attempts reached');
+      return;
+    }
+
+    // Clear any existing reconnect timeout
+    if (this.reconnectTimeout !== null) {
+      clearTimeout(this.reconnectTimeout);
+    }
+
+    this.reconnectAttempts++;
+    const delay = this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1);
+
+    this.reconnectTimeout = window.setTimeout(() => {
+      this.connect().catch(error => {
+        console.error('[WebSocketManager] Reconnection failed:', error);
+      });
+    }, delay);
+  }
+
+  sendMessage(text: string, incidentId?: string): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      throw new Error('WebSocket not connected');
+    }
+
+    const message = { text, incident_id: incidentId || '' };
+    this.ws.send(JSON.stringify(message));
+  }
+
+  onMessage(handler: (message: Message) => void): () => void {
+    this.messageHandlers.add(handler);
+    return () => this.messageHandlers.delete(handler);
+  }
+
+  onConnectionChange(handler: (connected: boolean) => void): () => void {
+    this.connectionHandlers.add(handler);
+    return () => this.connectionHandlers.delete(handler);
+  }
+
+  disconnect(): void {
+    this.shouldReconnect = false;
+    
+    if (this.reconnectTimeout !== null) {
+      clearTimeout(this.reconnectTimeout);
+      this.reconnectTimeout = null;
+    }
+    
+    this.stopPingInterval();
+    
+    if (this.ws) {
+      this.ws.close();
+      this.ws = null;
+    }
+  }
+
+  isConnected(): boolean {
+    return this.ws !== null && this.ws.readyState === WebSocket.OPEN;
+  }
+}
+
+export const wsManager = new WebSocketManager();
+
 export const apiService = {
   getMe: () => {
-    console.log('[API Service] Calling getMe');
     return api.get<User>('/api/auth/me').then((res: AxiosResponse<User>) => {
-      console.log('[API Service] getMe response:', res.data);
       return res.data;
     });
   },
-
-  getOrgUsers: (orgId?: string) => {
-    if (orgId) {
-      console.log('[API Service] Calling getOrgUsers for org:', orgId);
-      return api.get<User[]>(`/api/auth/organizations/${orgId}/users`).then((res: AxiosResponse<User[]>) => {
-        console.log('[API Service] getOrgUsers (org) response:', res.data);
-        return res.data;
-      });
-    } else {
-      console.log('[API Service] Calling getOrgUsers (active org)');
-      return api.get<User[]>('/api/auth/users').then((res: AxiosResponse<User[]>) => {
-        console.log('[API Service] getOrgUsers response:', res.data);
-        return res.data;
-      });
-    }
+  
+  getOrgUsers: () => {
+    return api.get<User[]>('/api/auth/users').then((res: AxiosResponse<User[]>) => {
+      return res.data;
+    });
   },
   
   createOrganization: (name: string) => {
-    console.log('[API Service] Creating organization:', name);
     return api.post<Organization>('/api/auth/organizations', { name }).then((res: AxiosResponse<Organization>) => {
-      console.log('[API Service] Organization created:', res.data);
       return res.data;
     });
   },
   
   createUser: (email: string, password: string, firstName: string, lastName: string) => {
-    console.log('[API Service] Creating user:', email);
     return api.post<User>('/api/auth/users', { email, password, first_name: firstName, last_name: lastName }).then((res: AxiosResponse<User>) => {
-      console.log('[API Service] User created:', res.data);
       return res.data;
     });
   },
   
   addMember: (email: string, role: string) => {
-    console.log('[API Service] Adding member:', email, role);
     return api.post('/api/auth/organizations/members', { email, role }).then((res: AxiosResponse) => {
-      console.log('[API Service] Member added:', res.data);
       return res.data;
     });
   },
 
   removeMember: (userId: string) => {
-    console.log('[API Service] Removing member:', userId);
     return api.delete(`/api/auth/organizations/members/${userId}`).then((res: AxiosResponse) => {
-      console.log('[API Service] Member removed:', res.data);
       return res.data;
     });
   },
 
   leaveOrganization: () => {
-    console.log('[API Service] Leaving organization');
     return api.post('/api/auth/organizations/leave').then((res: AxiosResponse) => {
-      console.log('[API Service] Left organization:', res.data);
       return res.data;
     });
   },
 
   searchOrganizations: (query: string) => {
-    console.log('[API Service] Searching organizations:', query);
     return api.get<Organization[]>('/api/auth/organizations/search', { params: { q: query } }).then((res: AxiosResponse<Organization[]>) => {
-      console.log('[API Service] Organizations found:', res.data);
       return res.data;
     });
   },
 
   createJoinRequest: (organizationId: string) => {
-    console.log('[API Service] Creating join request for org:', organizationId);
     return api.post<JoinRequest>('/api/auth/organizations/join-requests', { organization_id: organizationId }).then((res: AxiosResponse<JoinRequest>) => {
-      console.log('[API Service] Join request created:', res.data);
       return res.data;
     });
   },
 
   getJoinRequests: () => {
-    console.log('[API Service] Getting join requests');
     return api.get<JoinRequest[]>('/api/auth/organizations/join-requests').then((res: AxiosResponse<JoinRequest[]>) => {
-      console.log('[API Service] Join requests:', res.data);
       return res.data;
     });
   },
 
-  approveJoinRequest: (orgId: string, requestId: string) => {
-    console.log('[API Service] Approving join request:', requestId, 'for org:', orgId);
-    return api.put(`/api/auth/organizations/${orgId}/join-requests/${requestId}/approve`).then((res: AxiosResponse) => {
-      console.log('[API Service] Join request approved:', res.data);
+  approveJoinRequest: (requestId: string) => {
+    return api.put(`/api/auth/organizations/join-requests/${requestId}/approve`).then((res: AxiosResponse) => {
       return res.data;
     });
   },
 
   rejectJoinRequest: (requestId: string) => {
-    console.log('[API Service] Rejecting join request:', requestId);
     return api.put(`/api/auth/organizations/join-requests/${requestId}/reject`).then((res: AxiosResponse) => {
-      console.log('[API Service] Join request rejected:', res.data);
       return res.data;
     });
   },
 
   cleanupJoinRequests: () => {
-    console.log('[API Service] Cleaning up legacy join requests');
     return api.delete<{ deleted: number }>(`/api/auth/organizations/join-requests/cleanup`).then((res: AxiosResponse<{ deleted: number }>) => {
-      console.log('[API Service] Cleanup result:', res.data);
       return res.data;
     });
   },
 
   getMyOrganizations: () => {
-    console.log('[API Service] Getting my organizations');
     return api.get<Organization[]>(`/api/auth/my-organizations`).then((res: AxiosResponse<Organization[]>) => {
-      console.log('[API Service] My organizations:', res.data);
       return res.data;
     });
   },
 
   setActiveOrganization: (organizationId: string) => {
-    console.log('[API Service] Setting active organization:', organizationId);
     return api.post(`/api/auth/organizations/active`, { organization_id: organizationId }).then((res: AxiosResponse) => {
-      console.log('[API Service] Active organization updated:', res.data);
+      return res.data;
+    });
+  },
+
+  // Incident endpoints
+  getIncidents: () => {
+    return api.get<Incident[]>('/api/incidents').then((res: AxiosResponse<Incident[]>) => {
+      return res.data;
+    });
+  },
+
+  getIncident: (id: string) => {
+    return api.get<Incident>(`/api/incidents/${id}`).then((res: AxiosResponse<Incident>) => {
+      return res.data;
+    });
+  },
+
+  createIncident: (data: CreateIncidentRequest) => {
+    return api.post<Incident>('/api/incidents', data).then((res: AxiosResponse<Incident>) => {
+      return res.data;
+    });
+  },
+
+  updateIncident: (id: string, data: UpdateIncidentRequest) => {
+    return api.put<Incident>(`/api/incidents/${id}`, data).then((res: AxiosResponse<Incident>) => {
+      return res.data;
+    });
+  },
+
+  deleteIncident: (id: string) => {
+    return api.delete(`/api/incidents/${id}`).then((res: AxiosResponse) => {
       return res.data;
     });
   },
 
   getOrgJoinRequests: (organizationId: string) => {
-    console.log('[API Service] Getting join requests for org:', organizationId);
     return api.get<JoinRequest[]>(`/api/auth/organizations/${organizationId}/join-requests`).then((res: AxiosResponse<JoinRequest[]>) => {
-      console.log('[API Service] Org join requests:', res.data);
+      return res.data;
+    });
+  },
+
+  // Chat endpoints
+  sendMessage: (data: SendMessageRequest) => {
+    return api.post<Message>('/api/chat/messages', data).then((res: AxiosResponse<Message>) => {
+      return res.data;
+    });
+  },
+
+  getMessages: (incidentId?: string) => {
+    const params = incidentId ? { incident_id: incidentId } : {};
+    return api.get<Message[]>('/api/chat/messages', { params }).then((res: AxiosResponse<Message[]>) => {
+      return res.data;
+    });
+  },
+
+  // NL Query endpoint
+  nlQuery: (data: NLQueryRequest) => {
+    return api.post<NLQueryResponse>('/NL_query', data).then((res: AxiosResponse<NLQueryResponse>) => {
       return res.data;
     });
   },

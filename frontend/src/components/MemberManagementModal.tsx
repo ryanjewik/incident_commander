@@ -62,7 +62,7 @@ export default function MemberManagementModal({ onClose, orgId, onBack }: Member
     try {
       setLoadingMembers(true);
       console.log('[MemberManagementModal] Loading members for org:', currentOrgId);
-      const data = await apiService.getOrgUsers(currentOrgId);
+      const data = await apiService.getOrgUsers();
       console.log('[MemberManagementModal] Members loaded:', data);
       setMembers(data || []);
       // Determine admin based on membership role for this org
@@ -116,7 +116,7 @@ export default function MemberManagementModal({ onClose, orgId, onBack }: Member
     setProcessingRequestId(requestId);
 
     try {
-      await apiService.approveJoinRequest(currentOrgId, requestId);
+      await apiService.approveJoinRequest(requestId);
       setSuccess('Join request approved!');
       await loadJoinRequests();
       await loadMembers();

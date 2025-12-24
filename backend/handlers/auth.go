@@ -670,8 +670,6 @@ func (h *AuthHandler) GetOrgJoinRequests(c *gin.Context) {
 	orgID := c.Param("orgId")
 	ctx := c.Request.Context()
 
-	// Optionally, check if user is admin of this org (not shown here)
-
 	requests, err := h.userService.GetOrgJoinRequests(ctx, orgID)
 	if err != nil {
 		c.JSON(
