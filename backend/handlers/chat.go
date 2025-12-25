@@ -172,16 +172,20 @@ func (h *ChatHandler) GetMessages(c *gin.Context) {
 func (h *ChatHandler) HandleWebSocket(c *gin.Context) {
 	token := c.Query("token")
 	if token == "" {
+		log.Printf("[WebSocket] Missing token in query params")
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Missing token"})
 		return
 	}
 
+	log.Printf("[WebSocket] Attempting to verify token for WebSocket connection")
 	decodedToken, err := h.userService.VerifyToken(c.Request.Context(), token)
 	if err != nil {
 		log.Printf("[WebSocket] Token verification failed: %v", err)
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid token"})
 		return
 	}
+
+	log.Printf("[WebSocket] Token verified successfully for UID: %s", decodedToken.UID)
 
 	user, err := h.userService.GetUser(c.Request.Context(), decodedToken.UID)
 	if err != nil {
@@ -191,17 +195,22 @@ func (h *ChatHandler) HandleWebSocket(c *gin.Context) {
 	}
 
 	if user.OrganizationID == "" {
+		log.Printf("[WebSocket] User %s not part of an organization", user.Email)
 		c.JSON(http.StatusBadRequest, gin.H{"error": "User not part of an organization"})
 		return
 	}
+
+	log.Printf("[WebSocket] Preparing to upgrade connection for user %s", user.Email)
 
 	h.closeExistingUserConnection(user.ID)
 
 	conn, err := h.upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
-		log.Printf("[WebSocket] Upgrade failed: %v", err)
+		log.Printf("[WebSocket] Upgrade failed for user %s: %v", user.Email, err)
 		return
 	}
+
+	log.Printf("[WebSocket] Connection upgraded successfully for user %s", user.Email)
 
 	conn.SetReadDeadline(time.Now().Add(60 * time.Second))
 	conn.SetPongHandler(func(string) error {
