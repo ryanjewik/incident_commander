@@ -78,3 +78,7 @@ client.properties
 firebase-service-account.json
 .env
 *.log
+
+.scripts/
+.scripts/
+scripts/
