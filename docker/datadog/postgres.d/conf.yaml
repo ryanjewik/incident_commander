@@ -1,0 +1,21 @@
+init_config: {}
+
+instances:
+  - host: 172.21.0.3
+    port: 5432
+    username: dummy
+    password: dummypw
+    dbname: dummydb
+    tags:
+      - env:demo
+
+logs:
+  - type: file
+    path: /var/lib/postgresql/data/log/*.log
+    service: postgres
+    source: postgres
+    sourcecategory: database
+    tags:
+      - env:demo
+    # Set to true if you want multi-line support for stack traces
+    # multi_line: true
