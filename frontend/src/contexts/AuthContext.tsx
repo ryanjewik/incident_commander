@@ -29,7 +29,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [organization, setOrganization] = useState<Organization | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const fetchUserData = useCallback(async () => {
+  const fetchUserData = useCallback(async (user: FirebaseUser | null) => {
+    if (!user) {
+      setUserData(null);
+      setOrganization(null);
+      return;
+    }
+
     try {
       await new Promise(resolve => setTimeout(resolve, 100));
       
@@ -39,11 +45,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch (error: any) {
       console.error('[AuthContext] Error fetching user data:', error);
       // If user doesn't exist in backend (404), create them
-      if (error.response?.status === 404 && firebaseUser) {
+      if (error.response?.status === 404 && user) {
         console.log('[AuthContext] User not found in backend, creating user record');
         try {
-          const emailName = firebaseUser.email?.split('@')[0] || 'User';
-          await apiService.createUser(firebaseUser.email!, '', emailName, '');
+          const emailName = user.email?.split('@')[0] || 'User';
+          await apiService.createUser(user.email!, '', emailName, '');
           // Retry fetching user data
           const data = await apiService.getMe();
           setUserData(data);
@@ -55,19 +61,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setUserData(null);
       setOrganization(null);
     }
-  }, [firebaseUser]);
+  }, []);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       setFirebaseUser(user);
       
       try {
-        if (user) {
-          await fetchUserData();
-        } else {
-          setUserData(null);
-          setOrganization(null);
-        }
+        await fetchUserData(user);
       } finally {
         setLoading(false);
       }
@@ -113,7 +114,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const org = await apiService.createOrganization(name);
     setOrganization(org);
     if (firebaseUser) {
-      await fetchUserData();
+      await fetchUserData(firebaseUser);
     }
     return org;
   }, [firebaseUser, fetchUserData]);
@@ -125,20 +126,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const removeMember = useCallback(async (userId: string) => {
     await apiService.removeMember(userId);
     if (firebaseUser) {
-      await fetchUserData();
+      await fetchUserData(firebaseUser);
     }
   }, [firebaseUser, fetchUserData]);
 
   const leaveOrganization = useCallback(async () => {
     await apiService.leaveOrganization();
     if (firebaseUser) {
-      await fetchUserData();
+      await fetchUserData(firebaseUser);
     }
   }, [firebaseUser, fetchUserData]);
 
   const refreshUserData = useCallback(async () => {
     if (firebaseUser) {
-      await fetchUserData();
+      await fetchUserData(firebaseUser);
     }
   }, [firebaseUser, fetchUserData]);
 

@@ -7,6 +7,26 @@ interface ChatPanelProps {
   title?: string;
 }
 
+// Pastel color palette for different users
+const pastelColors = [
+  'bg-blue-200',
+  'bg-green-200',
+  'bg-yellow-200',
+  'bg-pink-200',
+  'bg-purple-200',
+  'bg-indigo-200',
+  'bg-red-200',
+  'bg-orange-200',
+  'bg-teal-200',
+  'bg-cyan-200'
+];
+
+// Function to get consistent color for a user
+const getUserColor = (userName: string): string => {
+  const hash = userName.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+  return pastelColors[hash % pastelColors.length];
+};
+
 function ChatPanel({ incidentId, title }: ChatPanelProps) {
   const [queryText, setQueryText] = useState('');
   const [isRecording, setIsRecording] = useState(false);
@@ -14,24 +34,36 @@ function ChatPanel({ incidentId, title }: ChatPanelProps) {
   const [loading, setLoading] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
   const [isLoadingMessages, setIsLoadingMessages] = useState(true);
+  const [currentUserName] = useState('You');
   const recognitionRef = useRef<any>(null);
   const mountedRef = useRef(true);
+  const currentIncidentRef = useRef<string | undefined>(incidentId);
 
   // Initialize WebSocket connection and fetch initial messages
   useEffect(() => {
     mountedRef.current = true;
+    currentIncidentRef.current = incidentId;
     
-    // Clear messages immediately when incident changes
-    setMessages([]);
+    // Set loading state but don't clear messages immediately
     setIsLoadingMessages(true);
     
+    let unsubscribers: (() => void)[] = [];
+    
     // Fetch messages first, then connect WebSocket
-    fetchMessages().then(() => {
-      connectWebSocket();
-    });
+    const initializeChat = async () => {
+      await fetchMessages();
+      const unsubs = await connectWebSocket();
+      if (unsubs) {
+        unsubscribers = unsubs;
+      }
+    };
+    
+    initializeChat();
 
     return () => {
       mountedRef.current = false;
+      currentIncidentRef.current = undefined;
+      unsubscribers.forEach(unsub => unsub());
       wsManager.disconnect();
     };
   }, [incidentId]);
@@ -40,13 +72,13 @@ function ChatPanel({ incidentId, title }: ChatPanelProps) {
     try {
       await wsManager.connect();
       
-      if (!mountedRef.current) return;
+      if (!mountedRef.current || currentIncidentRef.current !== incidentId) return;
       
       setIsConnected(true);
 
       // Listen for new messages
       const unsubscribeMessage = wsManager.onMessage((message) => {
-        if (!mountedRef.current) return;
+        if (!mountedRef.current || currentIncidentRef.current !== incidentId) return;
         
         // Only show messages for this incident (or general chat if no incident)
         const currentIncident = incidentId || '';
@@ -70,25 +102,20 @@ function ChatPanel({ incidentId, title }: ChatPanelProps) {
 
       // Listen for connection changes
       const unsubscribeConnection = wsManager.onConnectionChange((connected) => {
-        if (!mountedRef.current) return;
+        if (!mountedRef.current || currentIncidentRef.current !== incidentId) return;
         setIsConnected(connected);
         
-        // Refresh messages when reconnected to catch any missed messages
-        if (connected) {
-          fetchMessages();
-        }
+        // Don't refresh messages on reconnect - WebSocket will deliver any missed messages
       });
 
       // Return cleanup function
-      return () => {
-        unsubscribeMessage();
-        unsubscribeConnection();
-      };
+      return [unsubscribeMessage, unsubscribeConnection];
     } catch (error) {
       console.error('[ChatPanel] Failed to connect WebSocket:', error);
-      if (mountedRef.current) {
+      if (mountedRef.current && currentIncidentRef.current === incidentId) {
         setIsConnected(false);
       }
+      return [];
     }
   };
 
@@ -97,7 +124,7 @@ function ChatPanel({ incidentId, title }: ChatPanelProps) {
       setIsLoadingMessages(true);
       const msgs = await apiService.getMessages(incidentId);
       
-      if (mountedRef.current) {
+      if (mountedRef.current && currentIncidentRef.current === incidentId) {
         // Sort messages by created_at to ensure proper order
         const sortedMsgs = msgs.sort((a, b) => 
           new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
@@ -107,7 +134,7 @@ function ChatPanel({ incidentId, title }: ChatPanelProps) {
     } catch (error) {
       console.error('[ChatPanel] Error fetching messages:', error);
     } finally {
-      if (mountedRef.current) {
+      if (mountedRef.current && currentIncidentRef.current === incidentId) {
         setIsLoadingMessages(false);
       }
     }
@@ -206,69 +233,86 @@ function ChatPanel({ incidentId, title }: ChatPanelProps) {
   };
 
   return (
-    <div className='flex flex-col h-full'>
-      <div className='flex-1 overflow-y-auto mb-4 bg-white rounded border-2 border-pink-300 p-4'>
-        <div className='flex items-center justify-between mb-4'>
-          <h3 className='text-2xl font-bold text-purple-700'>
-            {title || (incidentId ? 'Incident Chat' : 'Team Chat')}
-          </h3>
-          <div className='flex items-center gap-2'>
-            <div className={`w-3 h-3 rounded-full ${isConnected ? 'bg-green-500' : 'bg-red-500'}`} />
-            <span className='text-sm text-gray-600'>
-              {isConnected ? 'Connected' : 'Disconnected'}
-            </span>
-          </div>
+    <div className='flex flex-col h-full bg-white rounded border-2 border-pink-300'>
+      <div className='flex items-center justify-between p-2 border-b-2 border-pink-300 flex-shrink-0'>
+        <h3 className='text-sm font-semibold text-purple-700'>
+          {title || (incidentId ? 'Incident Chat' : 'Team Chat')}
+        </h3>
+        <div className='flex items-center gap-2'>
+          <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-500' : 'bg-red-500'}`} />
+          <span className='text-xs text-gray-600'>
+            {isConnected ? 'Connected' : 'Disconnected'}
+          </span>
         </div>
+      </div>
+      <div className='flex-1 min-h-0 overflow-y-auto p-3'>
         {isLoadingMessages ? (
-          <p className='text-gray-500 text-center'>Loading messages...</p>
+          <p className='text-gray-500 text-center text-xs'>Loading messages...</p>
         ) : messages.length === 0 ? (
-          <p className='text-gray-500 text-center'>No messages yet. Start the conversation!</p>
+          <p className='text-gray-500 text-center text-xs'>No messages yet. Start the conversation!</p>
         ) : (
-          <div className='space-y-3'>
-            {messages.map((msg) => (
-              <div key={msg.id} className='bg-gray-50 p-3 rounded border border-gray-200'>
-                <div className='flex items-center justify-between mb-1'>
-                  <span className='font-semibold text-purple-700'>{msg.user_name}</span>
-                  <span className='text-xs text-gray-500'>
-                    {new Date(msg.created_at).toLocaleString()}
-                  </span>
+          <div className='space-y-2'>
+            {messages.map((msg) => {
+              const isCurrentUser = msg.user_name === currentUserName;
+              const bgColor = isCurrentUser ? 'bg-purple-300' : getUserColor(msg.user_name);
+              
+              return (
+                <div 
+                  key={msg.id} 
+                  className={`flex ${isCurrentUser ? 'justify-end' : 'justify-start'}`}
+                >
+                  <div 
+                    className={`${bgColor} p-2 rounded-lg border border-gray-200 max-w-[60%]`}
+                    style={{ wordWrap: 'break-word' }}
+                  >
+                    <div className='flex items-center gap-2 mb-0.5'>
+                      <span className='font-semibold text-gray-800 text-xs'>{msg.user_name}</span>
+                      <span className='text-[10px] text-gray-600'>
+                        {new Date(msg.created_at).toLocaleString()}
+                      </span>
+                    </div>
+                    <p className={`text-gray-900 text-xs text-left ${msg.mentions_bot ? 'font-medium' : ''}`}>
+                      {msg.text}
+                    </p>
+                  </div>
                 </div>
-                <p className={`text-gray-800 ${msg.mentions_bot ? 'bg-yellow-50 p-2 rounded border border-yellow-200' : ''}`}>
-                  {msg.text}
-                </p>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>
-      <div className='w-full bg-gradient-to-r from-purple-500 to-pink-500 p-6 rounded-md'>
-        <div className='flex gap-4 items-center'>
+      <div className='flex-shrink-0 bg-gradient-to-r from-purple-500 to-pink-500 p-3 rounded-b'>
+        <div className='flex gap-2 items-center'>
           <button
             onClick={handleVoiceQuery}
-            className={`h-16 w-16 rounded-md transition-colors flex items-center justify-center flex-shrink-0 ${
+            className={`h-12 w-12 rounded-lg transition-all flex items-center justify-center flex-shrink-0 ${
               isRecording 
-                ? 'bg-red-500 hover:bg-red-600 animate-pulse' 
-                : 'bg-teal-500 hover:bg-teal-600'
+                ? 'bg-red-500 hover:bg-red-600 animate-pulse ring-2 ring-red-300' 
+                : 'bg-teal-500 hover:bg-teal-600 ring-2 ring-teal-300'
             }`}
-            title={isRecording ? 'Recording...' : 'Voice Query'}
           >
-            <svg className='w-8 h-8 text-white' fill='currentColor' viewBox='0 0 20 20'>
-              <path fillRule='evenodd' d='M7 4a3 3 0 016 0v4a3 3 0 11-6 0V4zm4 10.93A7.001 7.001 0 0017 8a1 1 0 10-2 0A5 5 0 015 8a1 1 0 00-2 0 7.001 7.001 0 006 6.93V17H6a1 1 0 100 2h8a1 1 0 100-2h-3v-2.07z' clipRule='evenodd' />
+            <svg
+              className="w-6 h-6 text-white"
+              fill="currentColor"
+              viewBox="0 0 20 20"
+            >
+              <path fillRule="evenodd" d="M7 4a3 3 0 016 0v4a3 3 0 11-6 0V4zm4 10.93A7.001 7.001 0 0017 8a1 1 0 10-2 0A5 5 0 015 8a1 1 0 00-2 0 7.001 7.001 0 006 6.93V17H6a1 1 0 100 2h8a1 1 0 100-2h-3v-2.07z" clipRule="evenodd" />
             </svg>
           </button>
+
           <input
             type='text'
             value={queryText}
             onChange={(e) => setQueryText(e.target.value)}
             onKeyPress={(e) => e.key === 'Enter' && !loading && handleSubmit()}
             placeholder={incidentId ? 'Type a message about this incident...' : 'Type a message or use @assistant for AI help...'}
-            className='flex-grow h-16 px-4 rounded-md border-2 border-white focus:outline-none focus:ring-2 focus:ring-pink-300'
+            className='flex-grow h-10 px-3 rounded-md border-2 border-white focus:outline-none focus:ring-2 focus:ring-pink-300 text-xs'
             disabled={loading}
           />
           <button
             onClick={handleSubmit}
             disabled={loading || !queryText.trim()}
-            className='h-16 px-6 bg-pink-600 text-white font-semibold rounded-md hover:bg-pink-700 transition-colors flex-shrink-0 disabled:bg-gray-400'
+            className='h-10 px-3 bg-pink-600 text-white font-semibold rounded-md hover:bg-pink-700 transition-colors flex-shrink-0 disabled:bg-gray-400 text-xs'
           >
             {loading ? 'Sending...' : 'Send'}
           </button>

@@ -13,6 +13,7 @@ import OrganizationsModal from '../components/OrganizationsModal';
 import MemberManagementModal from '../components/MemberManagementModal';
 import type { Organization } from '../services/api';
 import { apiService } from '../services/api';
+import { User, ChevronDown } from 'lucide-react';
 
 export default function Dashboard() {
     useEffect(() => {
@@ -35,6 +36,7 @@ export default function Dashboard() {
   const [loadingOrgs, setLoadingOrgs] = useState(false);
   const [switchingOrg, setSwitchingOrg] = useState(false);
   const [selectedOrgId, setSelectedOrgId] = useState<string | undefined>(undefined);
+  const [showProfileMenu, setShowProfileMenu] = useState(false);
 
   useEffect(() => {
     if (userData?.organization_id) {
@@ -130,30 +132,24 @@ export default function Dashboard() {
 
   return (
     <>
-      <div className="bg-gradient-to-r from-purple-500 to-pink-500 w-screen h-50 flex items-center justify-between px-8 fixed top-0 left-0 right-0 z-10 border-3 border-purple-700 shadow-lg">
-        <div>
-          <h2 className="text-5xl font-bold text-white">
+      <div className="bg-gradient-to-r from-purple-200 to-pink-200 w-screen h-16 flex items-center justify-between px-6 fixed top-0 left-0 right-0 z-10 border-b border-purple-300 shadow-sm">
+        <div className="flex items-center gap-3">
+          <h2 className="text-xl md:text-2xl font-semibold text-purple-700">
             Incident Command Center
           </h2>
           {hasOrganization && userOrganizations.length > 0 && (
-            <p className="text-sm text-purple-100 mt-1">
-              Organization: <span className="font-semibold">{userOrganizations.find(o => o.id === userData?.organization_id)?.name || 'Unknown'}</span>
-            </p>
+            <span className="text-xs text-purple-600 bg-purple-100 px-2 py-1 rounded-full hidden md:inline-block">
+              {userOrganizations.find(o => o.id === userData?.organization_id)?.name || 'Unknown'}
+            </span>
           )}
         </div>
-        <div className="flex items-center gap-4">
-          <button
-            onClick={() => setShowDashboard(!showDashboard)}
-            className="bg-white text-white px-4 py-2 rounded-md hover:bg-gray-100 font-medium"
-          >
-            {showDashboard ? 'Incidents' : 'Dashboard'}
-          </button>
-          {userOrganizations.length > 1 && hasOrganization && (
+        <div className="flex items-center gap-3">
+          {hasOrganization && userOrganizations.length > 0 && (
             <select
               value={userData?.organization_id || ''}
               onChange={(e) => handleSwitchOrganization(e.target.value)}
               disabled={switchingOrg || loadingOrgs}
-              className="bg-white text-purple-600 px-3 py-2 rounded-md hover:bg-gray-100 font-medium border border-purple-300 focus:outline-none focus:ring-2 focus:ring-purple-500 disabled:opacity-50"
+              className="bg-transparent text-white px-2 py-1.5 text-sm rounded-md hover:bg-purple-100 hover:text-purple-700 font-medium border border-purple-300 focus:outline-none focus:ring-2 focus:ring-purple-300 disabled:opacity-50 transition-colors"
             >
               {userOrganizations.map((org) => (
                 <option key={org.id} value={org.id}>
@@ -163,28 +159,55 @@ export default function Dashboard() {
             </select>
           )}
           <button
+            onClick={() => setShowDashboard(!showDashboard)}
+            className="bg-transparent text-purple-700 px-3 py-1.5 text-sm rounded-md hover:bg-purple-100 font-medium transition-colors"
+          >
+            {showDashboard ? 'Incidents' : 'Dashboard'}
+          </button>
+          <button
             onClick={() => setShowOrgsModal(true)}
-            className="bg-white text-white px-4 py-2 rounded-md hover:bg-gray-100 font-medium"
+            className="bg-transparent text-pink-700 px-3 py-1.5 text-sm rounded-md hover:bg-pink-100 font-medium transition-colors"
           >
             Organizations
           </button>
-          <span className="text-white font-medium">
-            {userData?.first_name && userData?.last_name
-              ? `${userData.first_name} ${userData.last_name}`
-              : userData?.email?.split('@')[0] || 'User'}
-          </span>
-          <button
-            onClick={signOut}
-            className="bg-white text-white px-4 py-2 rounded-md hover:bg-gray-100 font-medium"
-          >
-            Sign Out
-          </button>
+          <div className="relative">
+            <button
+              onClick={() => setShowProfileMenu(!showProfileMenu)}
+              className="flex items-center gap-2 bg-transparent text-purple-700 px-2 py-1.5 rounded-md hover:bg-purple-100 transition-colors"
+            >
+              <div className="w-8 h-8 rounded-full bg-gradient-to-br from-purple-300 to-pink-300 flex items-center justify-center">
+                <User size={18} className="text-purple-700" />
+              </div>
+              <ChevronDown size={16} className="hidden md:block" />
+            </button>
+            {showProfileMenu && (
+              <div className="absolute right-0 mt-2 w-48 bg-white rounded-md shadow-lg border border-purple-200 py-1">
+                <div className="px-4 py-2 border-b border-purple-100">
+                  <p className="text-sm font-medium text-gray-800">
+                    {userData?.first_name && userData?.last_name
+                      ? `${userData.first_name} ${userData.last_name}`
+                      : userData?.email?.split('@')[0] || 'User'}
+                  </p>
+                  <p className="text-xs text-gray-500">{userData?.email}</p>
+                </div>
+                <button
+                  onClick={() => {
+                    signOut();
+                    setShowProfileMenu(false);
+                  }}
+                  className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-purple-50 transition-colors"
+                >
+                  Sign Out
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       </div>
-      <div className="pt-45 text-left relative left-1/2 right-1/2 -mx-[50vw] w-screen h-425 px-2">
+      <div className="fixed top-16 left-0 right-0 bottom-0 overflow-hidden">
         {showDashboard ? (
           hasOrganization ? (
-            <div className="bg-gradient-to-br from-purple-50 to-pink-50 h-346.5 w-full p-6 overflow-y-auto">
+            <div className="bg-gradient-to-br from-purple-50 to-pink-50 h-full w-full p-6 overflow-y-auto">
               <h2 className="text-3xl font-bold text-purple-700 mb-6">Dashboard Overview</h2>
               <div className="space-y-6">
                 <MetricsCards />
@@ -200,8 +223,8 @@ export default function Dashboard() {
               </div>
             </div>
           ) : (
-            <div className="bg-gradient-to-br from-purple-50 to-pink-50 h-346.5 w-full p-6 overflow-y-auto flex items-center justify-center">
-              <div className="text-center max-w-md">
+            <div className="bg-gradient-to-br from-purple-50 to-pink-50 h-full w-full p-6 overflow-y-auto">
+              <div className="max-w-md">
                 <h2 className="text-2xl font-bold text-purple-700 mb-3">Join an organization to see your dashboard</h2>
                 <p className="text-gray-600 mb-6">Your dashboards are organization-scoped. Create or join an organization to unlock incidents, metrics, and logs.</p>
                 <button
@@ -215,7 +238,7 @@ export default function Dashboard() {
           )
         ) : (
           hasOrganization ? (
-            <div className='flex'>
+            <div className='flex h-full'>
               <IncidentList
                 incidentData={incidentData}
                 selectedIncident={selectedIncident}
@@ -230,8 +253,8 @@ export default function Dashboard() {
               />
             </div>
           ) : (
-            <div className="bg-gradient-to-br from-purple-50 to-pink-50 h-346.5 w-full p-6 overflow-y-auto flex items-center justify-center">
-              <div className="text-center max-w-md">
+            <div className="bg-gradient-to-br from-purple-50 to-pink-50 h-full w-full p-6 overflow-y-auto">
+              <div className="max-w-md">
                 <h2 className="text-2xl font-bold text-purple-700 mb-3">Incidents require an organization</h2>
                 <p className="text-gray-600 mb-6">Join or create an organization to view and manage incidents.</p>
                 <button

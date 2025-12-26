@@ -153,62 +153,121 @@ class WebSocketManager {
   private shouldReconnect = true;
   private reconnectTimeout: number | null = null;
   private pingInterval: number | null = null;
+  private isConnecting = false;
+  private disconnectPromise: Promise<void> | null = null;
 
   async connect(): Promise<void> {
+    // Wait for any pending disconnect to complete
+    if (this.disconnectPromise) {
+      await this.disconnectPromise;
+    }
+
+    // If already connecting, wait for that to complete
+    if (this.isConnecting) {
+      return;
+    }
+
     // Clear any existing connection first
     if (this.ws) {
-      this.shouldReconnect = false;
-      this.ws.close();
-      this.ws = null;
-      await new Promise(resolve => setTimeout(resolve, 100)); // Brief delay
+      await this.forceDisconnect();
     }
 
+    this.isConnecting = true;
     this.shouldReconnect = true;
 
-    const user = auth.currentUser;
-    if (!user) {
-      throw new Error('User not authenticated');
+    try {
+      const user = auth.currentUser;
+      if (!user) {
+        throw new Error('User not authenticated');
+      }
+
+      const token = await user.getIdToken(false);
+      const wsUrl = `${WS_URL}/api/chat/ws?token=${token}`;
+
+      await new Promise<void>((resolve, reject) => {
+        this.ws = new WebSocket(wsUrl);
+
+        const connectionTimeout = setTimeout(() => {
+          if (this.ws && this.ws.readyState !== WebSocket.OPEN) {
+            this.ws.close();
+            reject(new Error('WebSocket connection timeout'));
+          }
+        }, 5000);
+
+        this.ws.onopen = () => {
+          clearTimeout(connectionTimeout);
+          this.reconnectAttempts = 0;
+          this.connectionHandlers.forEach(handler => handler(true));
+          
+          // Start ping interval
+          this.startPingInterval();
+          
+          resolve();
+        };
+
+        this.ws.onmessage = (event) => {
+          try {
+            const message = JSON.parse(event.data) as Message;
+            this.messageHandlers.forEach(handler => handler(message));
+          } catch (error) {
+            console.error('[WebSocketManager] Failed to parse message:', error);
+          }
+        };
+
+        this.ws.onerror = (error) => {
+          clearTimeout(connectionTimeout);
+          console.error('[WebSocketManager] Error:', error);
+          reject(error);
+        };
+
+        this.ws.onclose = () => {
+          clearTimeout(connectionTimeout);
+          this.stopPingInterval();
+          this.connectionHandlers.forEach(handler => handler(false));
+          
+          if (this.shouldReconnect) {
+            this.attemptReconnect();
+          }
+        };
+      });
+    } finally {
+      this.isConnecting = false;
     }
+  }
 
-    const token = await user.getIdToken(false);
-    const wsUrl = `${WS_URL}/api/chat/ws?token=${token}`;
-
-    return new Promise((resolve, reject) => {
-      this.ws = new WebSocket(wsUrl);
-
-      this.ws.onopen = () => {
-        this.reconnectAttempts = 0;
-        this.connectionHandlers.forEach(handler => handler(true));
+  private async forceDisconnect(): Promise<void> {
+    this.shouldReconnect = false;
+    
+    if (this.reconnectTimeout !== null) {
+      clearTimeout(this.reconnectTimeout);
+      this.reconnectTimeout = null;
+    }
+    
+    this.stopPingInterval();
+    
+    if (this.ws) {
+      const ws = this.ws;
+      this.ws = null;
+      
+      if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+        ws.close();
         
-        // Start ping interval
-        this.startPingInterval();
-        
-        resolve();
-      };
-
-      this.ws.onmessage = (event) => {
-        try {
-          const message = JSON.parse(event.data) as Message;
-          this.messageHandlers.forEach(handler => handler(message));
-        } catch (error) {
-          console.error('[WebSocketManager] Failed to parse message:', error);
-        }
-      };
-
-      this.ws.onerror = (error) => {
-        console.error('[WebSocketManager] Error:', error);
-        reject(error);
-      };
-
-      this.ws.onclose = () => {
-        this.stopPingInterval();
-        this.connectionHandlers.forEach(handler => handler(false));
-        
-        if (this.shouldReconnect) {
-          this.attemptReconnect();
-        }
-      };
-    });
+        // Wait for close event with timeout
+        await Promise.race([
+          new Promise<void>(resolve => {
+            const checkClosed = () => {
+              if (ws.readyState === WebSocket.CLOSED) {
+                resolve();
+              } else {
+                setTimeout(checkClosed, 50);
+              }
+            };
+            checkClosed();
+          }),
+          new Promise<void>(resolve => setTimeout(resolve, 500))
+        ]);
+      }
+    }
   }
 
   private startPingInterval(): void {
@@ -274,19 +333,7 @@ class WebSocketManager {
   }
 
   disconnect(): void {
-    this.shouldReconnect = false;
-    
-    if (this.reconnectTimeout !== null) {
-      clearTimeout(this.reconnectTimeout);
-      this.reconnectTimeout = null;
-    }
-    
-    this.stopPingInterval();
-    
-    if (this.ws) {
-      this.ws.close();
-      this.ws = null;
-    }
+    this.disconnectPromise = this.forceDisconnect();
   }
 
   isConnected(): boolean {
