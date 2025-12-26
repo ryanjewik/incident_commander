@@ -5,10 +5,24 @@ services:
       context: ./dummy_app
       dockerfile: Dockerfile
     container_name: dummy-app
+    env_file:
+      - .env
     environment:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_USER=dummy
+      - POSTGRES_PASSWORD=dummypw
+      - POSTGRES_DB=dummydb
       - SIM_INTERVAL=15
+      # Reduce synthetic spike frequency (longer intervals)
+      - REDIS_SIM_INTERVAL=60
+      - REDIS_MEM_SPIKE_INTERVAL_SECONDS=86400
+      - GEMINI_SIM_INTERVAL_SECONDS=3600
+      - GEMINI_ERROR_SIM_INTERVAL_SECONDS=86400
+      - PG_SIM_INTERVAL_SECONDS=60
+      - HOST_STRESS_INTERVAL_HOURS=24
       - DD_SERVICE=dummy-checkout
       - DD_ENV=demo
       - DD_VERSION=1.0.0
@@ -17,6 +31,7 @@ services:
       - "8000:8000"
     depends_on:
       - redis
+      - postgres
       - datadog
     command: ["ddtrace-run", "uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]
     networks:
@@ -29,6 +44,34 @@ services:
     restart: unless-stopped
     networks:
       - dd_net
+    command: ["redis-server", "--loglevel", "verbose"]
+    labels:
+      com.datadoghq.tags: "service:redis,env:demo"
+      # Auto-Discovery: run the redisdb check for this container and tag it
+      com.datadoghq.ad.check_names: '["redisdb"]'
+      com.datadoghq.ad.init_configs: '[{}]'
+      com.datadoghq.ad.instances: '[{"host":"%%host%%","port":"6379","tags":["service:redis","env:demo"]}]'
+      # Instruct the Logs Agent to collect docker logs for this container and set the service/source
+      com.datadoghq.logs: '[{"source":"redis","service":"redis","tags":["env:demo"]}]'
+
+  postgres:
+    image: postgres:15
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=dummy
+      - POSTGRES_PASSWORD=dummypw
+      - POSTGRES_DB=dummydb
+    networks:
+      - dd_net
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    labels:
+      com.datadoghq.tags: "service:postgres,env:demo"
+      com.datadoghq.ad.check_names: '["postgres"]'
+      com.datadoghq.ad.init_configs: '[{}]'
+      # Auto-discovery instance with credentials so the agent can authenticate
+      com.datadoghq.ad.instances: '[{"host":"%%host%%","port":"5432","username":"dummy","password":"dummypw","dbname":"dummydb","tags":["service:postgres","env:demo"]}]'
+      com.datadoghq.logs: '[{"source":"postgres","service":"postgres","tags":["env:demo"]}]'
 
   datadog:
     image: datadog/agent:latest
@@ -40,12 +83,18 @@ services:
       - DD_LOGS_ENABLED=true
       - DD_LOGS_CONFIG_CONTAINER_COLLECT_ALL=true
       - DD_DOGSTATSD_NON_LOCAL_TRAFFIC=true
+      - DD_DOGSTATSD_METRICS_STATS_ENABLE=true
       - DD_DOGSTATSD_BIND_HOST=0.0.0.0
+      - DD_LOG_LEVEL=debug
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - datadog-socket:/var/run/datadog
       - /proc/:/host/proc/:ro
       - /sys/fs/cgroup/:/host/sys/fs/cgroup:ro
+      # Mount Postgres data so the agent can tail server logs
+      - pgdata:/var/lib/postgresql/data:ro
+      # Mount local agent postgres integration config (logs)
+      - ./docker/datadog/postgres.d/conf.yaml:/etc/datadog-agent/conf.d/postgres.d/conf.yaml:ro
     ports:
       - "8125:8125/udp" # DogStatsD
       - "8126:8126"     # APM trace intake
@@ -58,4 +107,6 @@ networks:
 
 volumes:
   datadog-socket:
+    driver: local
+  pgdata:
     driver: local
