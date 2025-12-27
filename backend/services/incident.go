@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"sort"
 	"time"
 
 	"cloud.google.com/go/firestore"
@@ -67,9 +68,10 @@ func (s *IncidentService) GetIncident(ctx context.Context, incidentID, organizat
 }
 
 func (s *IncidentService) GetIncidentsByOrganization(ctx context.Context, organizationID string) ([]*models.Incident, error) {
+	// Query without OrderBy to avoid requiring a composite index
+	// We'll sort in memory instead
 	iter := s.firebaseService.Firestore.Collection("incidents").
 		Where("organization_id", "==", organizationID).
-		OrderBy("date", firestore.Desc).
 		Documents(ctx)
 
 	var incidents []*models.Incident
@@ -88,6 +90,19 @@ func (s *IncidentService) GetIncidentsByOrganization(ctx context.Context, organi
 		}
 		incidents = append(incidents, &incident)
 	}
+
+	// Sort in memory by date descending
+	sort.Slice(incidents, func(i, j int) bool {
+		timeI, errI := time.Parse(time.RFC3339, incidents[i].Date)
+		timeJ, errJ := time.Parse(time.RFC3339, incidents[j].Date)
+
+		// If parsing fails, fall back to string comparison
+		if errI != nil || errJ != nil {
+			return incidents[i].Date > incidents[j].Date
+		}
+
+		return timeI.After(timeJ)
+	})
 
 	return incidents, nil
 }

@@ -236,7 +236,7 @@ function ChatPanel({ incidentId, title }: ChatPanelProps) {
     <div className='flex flex-col h-full bg-white rounded border-2 border-pink-300'>
       <div className='flex items-center justify-between p-2 border-b-2 border-pink-300 flex-shrink-0'>
         <h3 className='text-sm font-semibold text-purple-700'>
-          {title || (incidentId ? 'Incident Chat' : 'Team Chat')}
+          {title || (incidentId ? 'Incident Chat' : 'NL Query')}
         </h3>
         <div className='flex items-center gap-2'>
           <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-500' : 'bg-red-500'}`} />
@@ -248,8 +248,6 @@ function ChatPanel({ incidentId, title }: ChatPanelProps) {
       <div className='flex-1 min-h-0 overflow-y-auto p-3'>
         {isLoadingMessages ? (
           <p className='text-gray-500 text-center text-xs'>Loading messages...</p>
-        ) : messages.length === 0 ? (
-          <p className='text-gray-500 text-center text-xs'>No messages yet. Start the conversation!</p>
         ) : (
           <div className='space-y-2'>
             {messages.map((msg) => {
