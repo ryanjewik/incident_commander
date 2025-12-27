@@ -395,6 +395,13 @@ func (us *UserService) UpdateOrganizationDatadog(ctx context.Context, orgID stri
 			}
 		}
 
+		// Handle clientId for OAuth token issuance (use webhookSecret as the client secret)
+		if cidRaw, ok := secrets["client_id"]; ok {
+			if cid, ok2 := cidRaw.(string); ok2 && strings.TrimSpace(cid) != "" {
+				updates = append(updates, firestore.Update{Path: "datadog_secrets.client_id", Value: cid})
+			}
+		}
+
 		// If both apiKey and appKey are provided and non-empty, encrypt them before saving
 		apiRaw, apiOk := secrets["apiKey"]
 		appRaw, appOk := secrets["appKey"]

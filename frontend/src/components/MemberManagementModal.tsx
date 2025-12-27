@@ -9,6 +9,8 @@ interface DatadogSecrets {
   apiKey?: string;
   appKey?: string;
   webhookSecret?: string;
+  clientId?: string;
+  // clientSecret removed: webhookSecret is used as the single secret
   // encrypted blobs returned from backend (optional)
   encrypted_apiKey?: string;
   encrypted_appKey?: string;
@@ -80,6 +82,7 @@ export default function MemberManagementModal({ onClose, orgId, onBack }: Member
     apiKey: '',
     appKey: '',
     webhookSecret: '',
+    clientId: '',
   });
   const [savingSecrets, setSavingSecrets] = useState(false);
   const [datadogSettings, setDatadogSettings] = useState<DatadogSettings>({
@@ -134,13 +137,14 @@ export default function MemberManagementModal({ onClose, orgId, onBack }: Member
           const hasApiEnc = !!orgWithDatadog.datadog_secrets.encrypted_apiKey || !!orgWithDatadog.datadog_secrets.apiKey || false;
           const hasAppEnc = !!orgWithDatadog.datadog_secrets.encrypted_appKey || !!orgWithDatadog.datadog_secrets.appKey || false;
           const hasWebhook = !!orgWithDatadog.datadog_secrets.webhookSecret || false;
+          const hasClientId = !!(orgWithDatadog.datadog_secrets as any).client_id || false;
           if (hasApiEnc || hasAppEnc || hasWebhook) {
-            setDatadogSecrets({ apiKey: '********', appKey: '********', webhookSecret: '********' });
+            setDatadogSecrets({ apiKey: '********', appKey: '********', webhookSecret: '********', clientId: hasClientId ? ((orgWithDatadog.datadog_secrets as any).client_id as string) : '' });
           } else {
-            setDatadogSecrets({ apiKey: '', appKey: '', webhookSecret: '' });
+            setDatadogSecrets({ apiKey: '', appKey: '', webhookSecret: '', clientId: '' });
           }
         } else {
-          setDatadogSecrets({ apiKey: '', appKey: '', webhookSecret: '' });
+          setDatadogSecrets({ apiKey: '', appKey: '', webhookSecret: '', clientId: '' });
         }
 
         // load settings independently of secrets presence
@@ -163,7 +167,7 @@ export default function MemberManagementModal({ onClose, orgId, onBack }: Member
         }
       } else {
         // No stored datadog config — keep inputs empty and toggles at their initial (false) state
-        setDatadogSecrets({ apiKey: '', appKey: '', webhookSecret: '' });
+          setDatadogSecrets({ apiKey: '', appKey: '', webhookSecret: '', clientId: '' });
         setDatadogSettings({ systemMetrics: false, alertStatus: false, activityFeed: false, securitySignals: false, liveLogs: false });
       }
     } catch (err) {
@@ -220,10 +224,12 @@ export default function MemberManagementModal({ onClose, orgId, onBack }: Member
       const apiKey = datadogSecrets.apiKey?.trim();
       const appKey = datadogSecrets.appKey?.trim();
       const webhookSecret = datadogSecrets.webhookSecret?.trim();
+      const clientId = datadogSecrets.clientId?.trim();
       // If input is non-empty and not the masked placeholder, include it
       if (apiKey && apiKey !== '********') payload.apiKey = apiKey;
       if (appKey && appKey !== '********') payload.appKey = appKey;
       if (webhookSecret && webhookSecret !== '********') payload.webhookSecret = webhookSecret;
+      if (clientId && clientId !== '********') payload.client_id = clientId;
 
       await apiService.saveDatadogSecrets(currentOrgId, payload as any);
       setSuccess('Datadog secrets and settings saved successfully!');
@@ -416,6 +422,17 @@ export default function MemberManagementModal({ onClose, orgId, onBack }: Member
                     onChange={e => setDatadogSecrets(s => ({ ...s, webhookSecret: e.target.value }))}
                     className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
                     placeholder="********"
+                    autoComplete="off"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Webhook Client ID</label>
+                  <input
+                    type="text"
+                    value={datadogSecrets.clientId}
+                    onChange={e => setDatadogSecrets(s => ({ ...s, clientId: e.target.value }))}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                    placeholder="Optional client id for OAuth"
                     autoComplete="off"
                   />
                 </div>
