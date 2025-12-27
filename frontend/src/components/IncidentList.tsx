@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Incident } from '../services/api';
+import type { Incident } from '../services/api';
 
 interface IncidentListProps {
   incidentData: Incident[];

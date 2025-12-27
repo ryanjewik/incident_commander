@@ -2,7 +2,7 @@ import ChatPanel from './ChatPanel';
 import { useEffect, useRef } from 'react';
 
 interface Incident {
-  id: number;
+  id: string;
   title: string;
   status: string;
   date: string;
@@ -11,15 +11,15 @@ interface Incident {
 }
 
 interface DashboardSectionProps {
-  selectedIncident: number | null;
+  selectedIncident: string | null;
   incidentData: Incident[];
   onClose: () => void;
-  onStatusChange: (incidentId: number, newStatus: string) => void;
-  onSendIncident?: (incidentId: number) => void;
+  onStatusChange: (incidentId: string, newStatus: string) => void;
+  onSendIncident?: (incidentId: string) => void;
 }
 
 function MainContent({ selectedIncident, incidentData, onClose, onStatusChange, onSendIncident }: DashboardSectionProps) {
-  const prevIncidentRef = useRef<number | null>(null);
+  const prevIncidentRef = useRef<string | null>(null);
 
   useEffect(() => {
     prevIncidentRef.current = selectedIncident;
