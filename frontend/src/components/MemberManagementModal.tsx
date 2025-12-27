@@ -255,7 +255,9 @@ export default function MemberManagementModal({ onClose, orgId, onBack }: Member
     setProcessingRequestId(requestId);
 
     try {
-      await apiService.approveJoinRequest(currentOrgId, requestId);
+      // approveJoinRequest(requestId, orgId?) expects the request id first,
+      // then optional orgId. Swap the args so the correct endpoint is called.
+      await apiService.approveJoinRequest(requestId, currentOrgId);
       setSuccess('Join request approved!');
       await loadJoinRequests();
       await loadMembers();
