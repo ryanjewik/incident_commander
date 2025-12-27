@@ -36,6 +36,10 @@ func Register(r *gin.Engine, app *handlers.App, userService *services.UserServic
 
 	// Initialize chat handler
 	chatHandler := handlers.NewChatHandler(userService, firebaseService)
+	// Initialize datadog webhook handler (public endpoint)
+	ddWebhookHandler := handlers.NewDatadogWebhookHandler(incidentService, firebaseService)
+	// OAuth token endpoint
+	oauthHandler := handlers.NewOAuthHandler(firebaseService)
 
 	// Public routes don't need auth
 	public := r.Group("/api/auth")
@@ -88,6 +92,14 @@ func Register(r *gin.Engine, app *handlers.App, userService *services.UserServic
 
 	// WebSocket endpoint (auth handled in handler via token query param)
 	r.GET("/api/chat/ws", chatHandler.HandleWebSocket)
+
+	// Datadog webhook endpoint (no auth middleware; validates secret header)
+	r.POST("/webhook/datadog", ddWebhookHandler.HandleDatadogWebhook)
+	// Alias for legacy path — accept Datadog configured with /datadog/webhook
+	r.POST("/datadog/webhook", ddWebhookHandler.HandleDatadogWebhook)
+
+	// OAuth token endpoint for client_credentials
+	r.POST("/oauth/token", oauthHandler.Token)
 
 	// NL Query endpoint - now protected
 	nlQuery := r.Group("")

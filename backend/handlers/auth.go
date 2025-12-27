@@ -733,6 +733,10 @@ func (h *AuthHandler) SaveDatadogSecrets(c *gin.Context) {
 			tmp["webhookSecret"] = v
 			hasAny = true
 		}
+		if v, ok := payload["client_id"]; ok {
+			tmp["client_id"] = v
+			hasAny = true
+		}
 		if hasAny {
 			secrets = tmp
 		}
@@ -755,6 +759,14 @@ func (h *AuthHandler) SaveDatadogSecrets(c *gin.Context) {
 
 	// Save to organization document. Pass the original secrets only when provided
 	// so the service can perform encryption/hashing and not accidentally clear values.
+	if secrets != nil {
+		if v, ok := secrets["client_id"]; ok {
+			log.Printf("[datadog-save] saving client_id for org=%s client_id=%v", orgID, v)
+		} else {
+			log.Printf("[datadog-save] no client_id in payload for org=%s", orgID)
+		}
+	}
+
 	if err := h.userService.UpdateOrganizationDatadog(ctx, orgID, secrets, settings); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
