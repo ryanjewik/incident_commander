@@ -83,4 +83,5 @@ firebase-service-account.json
 .scripts/
 scripts/
 
+test.txt
 backend/backend
