@@ -59,6 +59,19 @@ services:
       - ./backend/firebase-service-account.json:/root/backend/firebase-service-account.json:ro
     networks:
       - dd_net
+  logs_agent:
+    build:
+      context: ./logs_agent
+      dockerfile: Dockerfile
+    container_name: logs-agent
+    working_dir: /app
+    volumes:
+      - ./logs_agent/outputs:/app/outputs
+    env_file:
+      - .env
+    restart: unless-stopped
+    networks:
+      - dd_net
 networks:
   dd_net:
     driver: bridge
