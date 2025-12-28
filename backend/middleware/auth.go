@@ -18,7 +18,9 @@ const (
 
 func AuthMiddleware(userService *services.UserService) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		log.Printf("[Auth] ===== AUTH MIDDLEWARE START =====")
 		log.Printf("[Auth] Method: %s, Path: %s", c.Request.Method, c.Request.URL.Path)
+		log.Printf("[Auth] Request ID: %p", c.Request)
 
 		authHeader := c.GetHeader("Authorization")
 		if authHeader == "" {
@@ -46,20 +48,73 @@ func AuthMiddleware(userService *services.UserService) gin.HandlerFunc {
 		}
 
 		log.Printf("[Auth] Token verified successfully for UID: %s", decodedToken.UID)
+		log.Printf("[Auth] About to c.Set userID...")
 
 		c.Set("userID", decodedToken.UID)
 
-		log.Printf("[Auth] Context values set - userID: %s", decodedToken.UID)
+		log.Printf("[Auth] c.Set('userID', '%s') completed", decodedToken.UID)
 
+		// Fetch user data to get organization ID
+		log.Printf("[Auth] Fetching user from Firestore for UID: %s", decodedToken.UID)
+		user, err := userService.GetUser(c.Request.Context(), decodedToken.UID)
+		if err != nil {
+			log.Printf("[Auth] User not found in Firestore: %v. Attempting to create user record...", err)
+
+			// Get Firebase Auth user details to create Firestore record
+			authUser, authErr := userService.GetAuthUser(c.Request.Context(), decodedToken.UID)
+			if authErr != nil {
+				log.Printf("[Auth] Failed to fetch Firebase Auth user: %v", authErr)
+				c.JSON(http.StatusUnauthorized, gin.H{"error": "user not found"})
+				c.Abort()
+				return
+			}
+
+			// Create user record in Firestore
+			user, err = userService.CreateUserRecord(c.Request.Context(), authUser.UID, authUser.Email, authUser.DisplayName)
+			if err != nil {
+				log.Printf("[Auth] Failed to create user record: %v", err)
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create user record"})
+				c.Abort()
+				return
+			}
+			log.Printf("[Auth] User record created for UID: %s", authUser.UID)
+		}
+
+		log.Printf("[Auth] User fetched - UID: %s, Email: %s, OrganizationID: '%s'", user.ID, user.Email, user.OrganizationID)
+		log.Printf("[Auth] OrganizationID length: %d, is empty: %v, equals 'default': %v",
+			len(user.OrganizationID),
+			user.OrganizationID == "",
+			user.OrganizationID == "default")
+
+		// Set organization ID in context if user belongs to an organization
+		if user.OrganizationID != "" && user.OrganizationID != "default" {
+			log.Printf("[Auth] Setting organizationID in context: '%s'", user.OrganizationID)
+			c.Set("organizationID", user.OrganizationID)
+			log.Printf("[Auth] c.Set('organizationID', '%s') completed", user.OrganizationID)
+			log.Printf("[Auth] Context values set - userID: %s, organizationID: %s", decodedToken.UID, user.OrganizationID)
+		} else {
+			log.Printf("[Auth] NOT setting organizationID (value: '%s')", user.OrganizationID)
+			log.Printf("[Auth] Context values set - userID: %s (no organization)", decodedToken.UID)
+		}
+
+		log.Printf("[Auth] Verifying context after c.Set...")
 		testUserID, existsUser := c.Get("userID")
-		log.Printf("[Auth] Verification after c.Set - userID exists: %v (value: %v)",
-			existsUser, testUserID)
+		testOrgID, existsOrg := c.Get("organizationID")
+		log.Printf("[Auth] Verification after c.Set - userID exists: %v (value: %v, type: %T), organizationID exists: %v (value: %v, type: %T)",
+			existsUser, testUserID, testUserID, existsOrg, testOrgID, testOrgID)
+
+		log.Printf("[Auth] All context keys before c.Next():")
+		for key := range c.Keys {
+			val, _ := c.Get(key)
+			log.Printf("[Auth]   - Key: %s, Value: %v, Type: %T", key, val, val)
+		}
 
 		log.Printf("[Auth] Calling c.Next()...")
 
 		c.Next()
 
 		log.Printf("[Auth] After c.Next() - Response Status: %d", c.Writer.Status())
+		log.Printf("[Auth] ===== AUTH MIDDLEWARE END =====")
 	}
 }
 

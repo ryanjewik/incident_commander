@@ -11,7 +11,7 @@ import StatusDistribution from '../components/dashboard_dummies/StatusDistributi
 import PerformanceMetrics from '../components/dashboard_dummies/PerformanceMetrics';
 import OrganizationsModal from '../components/OrganizationsModal';
 import MemberManagementModal from '../components/MemberManagementModal';
-import type { Organization } from '../services/api';
+import type { Organization, Incident } from '../services/api';
 import { apiService } from '../services/api';
 import { User, ChevronDown } from 'lucide-react';
 
@@ -26,7 +26,7 @@ export default function Dashboard() {
     }, []);
   const { signOut, userData, leaveOrganization, refreshUserData } = useAuth();
   
-  const [selectedIncident, setSelectedIncident] = useState<number | null>(null);
+  const [selectedIncident, setSelectedIncident] = useState<string | null>(null);
   const [showDashboard, setShowDashboard] = useState(false);
   const [showOrgsModal, setShowOrgsModal] = useState(false);
   const [showMemberModal, setShowMemberModal] = useState(false);
@@ -37,10 +37,13 @@ export default function Dashboard() {
   const [switchingOrg, setSwitchingOrg] = useState(false);
   const [selectedOrgId, setSelectedOrgId] = useState<string | undefined>(undefined);
   const [showProfileMenu, setShowProfileMenu] = useState(false);
+  const [incidentData, setIncidentData] = useState<Incident[]>([]);
+  const [loadingIncidents, setLoadingIncidents] = useState(false);
 
   useEffect(() => {
     if (userData?.organization_id) {
       loadUserOrganizations();
+      loadIncidents();
     }
   }, [userData?.organization_id]);
 
@@ -56,11 +59,24 @@ export default function Dashboard() {
     }
   };
 
+  const loadIncidents = async () => {
+    try {
+      setLoadingIncidents(true);
+      const incidents = await apiService.getIncidents();
+      setIncidentData(incidents || []);
+    } catch (error) {
+      console.error('Failed to load incidents:', error);
+    } finally {
+      setLoadingIncidents(false);
+    }
+  };
+
   const handleSwitchOrganization = async (orgId: string) => {
     try {
       setSwitchingOrg(true);
       await apiService.setActiveOrganization(orgId);
       await refreshUserData();
+      await loadIncidents();
     } catch (error) {
       console.error('Failed to switch organization:', error);
       alert('Failed to switch organization. Please try again.');
@@ -69,49 +85,19 @@ export default function Dashboard() {
     }
   };
 
-  const [incidentData, setIncidentData] = useState([
-    { id: 1, title: 'Network Outage', status: 'Active', date: '2025-06-01T14:32:15', type: 'Incident Report', description: 'Multiple reports of network connectivity issues affecting the east coast data center. Primary and backup routers are experiencing intermittent failures.' },
-    { id: 2, title: 'Database Latency', status: 'Ignored', date: '2024-11-02T09:15:42', type: 'NL Query', description: 'Increased query response times observed on the production database. Average latency has risen from 50ms to 250ms over the past hour.' },
-    { id: 3, title: 'Service Degradation', status: 'Active', date: '2025-03-03T18:45:30', type: 'NL Query', description: 'API response times are 3x slower than baseline. Users reporting timeout errors when accessing the dashboard.' },
-    { id: 4, title: 'API Errors', status: 'New', date: '2024-06-04T22:10:05', type: 'NL Query', description: 'Sudden spike in 500 error responses from the payment processing API. Affecting approximately 15% of transaction attempts.' },
-    { id: 5, title: 'Security Breach', status: 'Resolved', date: '2024-07-05T03:28:19', type: 'Incident Report', description: 'Unauthorized access attempt detected from unknown IP addresses. Firewall rules have been updated and threat has been mitigated.' },
-    { id: 6, title: 'Power Failure', status: 'Active', date: '2024-06-16T11:55:33', type: 'Incident Report', description: 'Primary power supply failure in building C. Systems running on backup generators. Expected restoration in 2 hours.' },
-    { id: 7, title: 'Hardware Malfunction', status: 'Active', date: '2024-06-07T16:20:47', type: 'NL Query', description: 'Storage array controller reporting critical errors. RAID array degraded, replacement hardware has been ordered.' },
-    { id: 8, title: 'SSL Certificate Expiration', status: 'New', date: '2025-05-12T07:30:22', type: 'Incident Report', description: 'SSL certificate for api.example.com will expire in 7 days. Renewal process needs to be initiated immediately.' },
-    { id: 9, title: 'Memory Leak Detected', status: 'Active', date: '2025-04-20T13:42:18', type: 'NL Query', description: 'Application server memory usage growing continuously. Current usage at 92% and climbing. Service restart may be required.' },
-    { id: 10, title: 'DDoS Attack Attempt', status: 'Resolved', date: '2024-12-15T20:15:55', type: 'Incident Report', description: 'Large-scale DDoS attack detected targeting web servers. Traffic filtering and rate limiting successfully prevented service disruption.' },
-    { id: 11, title: 'Disk Space Critical', status: 'Active', date: '2025-01-08T05:12:40', type: 'NL Query', description: 'Log partition on server-prod-03 at 98% capacity. Automated cleanup scripts failed to run. Manual intervention required.' },
-    { id: 12, title: 'Load Balancer Failure', status: 'New', date: '2025-02-14T10:08:12', type: 'Incident Report', description: 'Primary load balancer unresponsive. Traffic automatically failed over to secondary. Investigation into root cause ongoing.' },
-    { id: 13, title: 'Cache Server Down', status: 'Ignored', date: '2024-10-22T15:33:27', type: 'NL Query', description: 'Redis cache cluster node 3 is offline. Cluster operating in degraded mode but still functional. Planned maintenance window scheduled.' },
-    { id: 14, title: 'Authentication Service Timeout', status: 'Active', date: '2025-05-28T19:47:51', type: 'Incident Report', description: 'OAuth authentication service experiencing timeout errors. Users unable to log in. Backend team investigating database connection pool exhaustion.' },
-    { id: 15, title: 'CDN Performance Issues', status: 'Resolved', date: '2024-09-11T12:25:09', type: 'NL Query', description: 'CDN edge nodes reporting degraded performance in Asia-Pacific region. Issue resolved after cache purge and configuration update.' },
-  ]);
-
-  const handleStatusChange = (incidentId: number, newStatus: string) => {
-    setIncidentData(prevData => 
-      prevData.map(incident => 
-        incident.id === incidentId 
-          ? { ...incident, status: newStatus }
-          : incident
-      )
-    );
-  };
-
-  const handleSendIncident = async (incidentId: number) => {
-    const incident = incidentData.find(i => i.id === incidentId);
-    if (!incident) return;
-
+  const handleStatusChange = async (incidentId: string, newStatus: string) => {
     try {
-      await apiService.createIncident({
-        title: incident.title,
-        status: incident.status,
-        type: incident.type,
-        description: incident.description,
-      });
-      alert('Incident sent to Firestore successfully!');
+      await apiService.updateIncident(incidentId, { status: newStatus });
+      setIncidentData(prevData => 
+        prevData.map(incident => 
+          incident.id === incidentId 
+            ? { ...incident, status: newStatus }
+            : incident
+        )
+      );
     } catch (error) {
-      console.error('Failed to send incident:', error);
-      alert('Failed to send incident to Firestore. Please try again.');
+      console.error('Failed to update incident status:', error);
+      alert('Failed to update incident status. Please try again.');
     }
   };
 
@@ -239,18 +225,26 @@ export default function Dashboard() {
         ) : (
           hasOrganization ? (
             <div className='flex h-full'>
-              <IncidentList
-                incidentData={incidentData}
-                selectedIncident={selectedIncident}
-                onSelectIncident={setSelectedIncident}
-              />
-              <MainContent 
-                selectedIncident={selectedIncident}
-                incidentData={incidentData}
-                onClose={() => setSelectedIncident(null)}
-                onStatusChange={handleStatusChange}
-                onSendIncident={handleSendIncident}
-              />
+              {loadingIncidents ? (
+                <div className="flex items-center justify-center w-full">
+                  <p className="text-purple-700">Loading incidents...</p>
+                </div>
+              ) : (
+                <>
+                  <IncidentList
+                    incidentData={incidentData}
+                    selectedIncident={selectedIncident}
+                    onSelectIncident={setSelectedIncident}
+                    onStatusChange={handleStatusChange}
+                  />
+                  <MainContent 
+                    selectedIncident={selectedIncident}
+                    incidentData={incidentData}
+                    onClose={() => setSelectedIncident(null)}
+                    onStatusChange={handleStatusChange}
+                  />
+                </>
+              )}
             </div>
           ) : (
             <div className="bg-gradient-to-br from-purple-50 to-pink-50 h-full w-full p-6 overflow-y-auto">

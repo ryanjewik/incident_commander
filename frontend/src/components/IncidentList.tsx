@@ -1,21 +1,14 @@
 import { useState } from 'react';
-
-interface Incident {
-  id: number;
-  title: string;
-  status: string;
-  date: string;
-  type: string;
-  description: string;
-}
+import type { Incident } from '../services/api';
 
 interface IncidentListProps {
   incidentData: Incident[];
-  selectedIncident: number | null;
-  onSelectIncident: (id: number) => void;
+  selectedIncident: string | null;
+  onSelectIncident: (id: string) => void;
+  onStatusChange: (incidentId: string, newStatus: string) => void;
 }
 
-function IncidentList({ incidentData, selectedIncident, onSelectIncident }: IncidentListProps) {
+function IncidentList({ incidentData, selectedIncident, onSelectIncident, onStatusChange }: IncidentListProps) {
   const [statusFilter, setStatusFilter] = useState<string>('All');
   const [typeFilter, setTypeFilter] = useState<string>('All');
 
@@ -24,6 +17,11 @@ function IncidentList({ incidentData, selectedIncident, onSelectIncident }: Inci
     const matchesType = typeFilter === 'All' || incident.type === typeFilter;
     return matchesStatus && matchesType;
   });
+
+  const handleStatusChange = (e: React.MouseEvent, incidentId: string, newStatus: string) => {
+    e.stopPropagation();
+    onStatusChange(incidentId, newStatus);
+  };
 
   return (
     <div className='w-full md:w-1/5 p-1 md:p-2 bg-purple-100 border-3 border-purple-700 shadow-lg ml-0 md:ml-1 h-full flex flex-col overflow-hidden'>
@@ -74,15 +72,23 @@ function IncidentList({ incidentData, selectedIncident, onSelectIncident }: Inci
             </div>
             <div className='flex flex-col min-w-0 flex-1'>
               <strong className="text-[11px] md:text-xs font-semibold truncate">{incident.title}</strong>
-              <div className='flex gap-0.5 mt-0.5 flex-wrap'>
-                <span className={`px-1 py-0.5 rounded-sm text-[8px] md:text-[9px] font-semibold ${
-                  incident.status === 'Active' ? 'bg-purple-600 text-white' :
-                  incident.status === 'Ignored' ? 'bg-gray-400 text-white' :
-                  incident.status === 'New' ? 'bg-blue-500 text-white' :
-                  incident.status === 'Resolved' ? 'bg-green-500 text-white' : 'bg-gray-300'
-                }`}>
-                  {incident.status}
-                </span>
+              <div className='flex gap-0.5 mt-0.5 flex-wrap items-center'>
+                <select
+                  value={incident.status}
+                  onChange={(e) => handleStatusChange(e as any, incident.id, e.target.value)}
+                  onClick={(e) => e.stopPropagation()}
+                  className={`px-1 py-0.5 rounded-sm text-[8px] md:text-[9px] font-semibold border border-transparent hover:border-purple-900 focus:outline-none focus:ring-1 focus:ring-purple-900 ${
+                    incident.status === 'Active' ? 'bg-purple-600 text-white' :
+                    incident.status === 'Ignored' ? 'bg-gray-400 text-white' :
+                    incident.status === 'New' ? 'bg-blue-500 text-white' :
+                    incident.status === 'Resolved' ? 'bg-green-500 text-white' : 'bg-gray-300'
+                  }`}
+                >
+                  <option value="New">New</option>
+                  <option value="Active">Active</option>
+                  <option value="Resolved">Resolved</option>
+                  <option value="Ignored">Ignored</option>
+                </select>
                 <span className='px-1 py-0.5 rounded-sm text-[8px] md:text-[9px] font-semibold bg-orange-400 text-white hidden md:inline-block truncate'>
                   {incident.date}
                 </span>
