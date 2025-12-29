@@ -1,5 +1,5 @@
 import ChatPanel from './ChatPanel';
-import { useEffect, useRef } from 'react';
+import { useState, useRef } from 'react';
 
 interface Incident {
   id: string;
@@ -19,13 +19,100 @@ interface DashboardSectionProps {
 }
 
 function MainContent({ selectedIncident, incidentData, onClose, onStatusChange, onSendIncident }: DashboardSectionProps) {
-  const prevIncidentRef = useRef<string | null>(null);
+  const [queryText, setQueryText] = useState('');
+  const [isRecording, setIsRecording] = useState(false);
+  const recognitionRef = useRef<any>(null);
 
-  useEffect(() => {
-    prevIncidentRef.current = selectedIncident;
-  }, [selectedIncident]);
+  const incident = incidentData.find(inc => inc.id === selectedIncident);
 
-  const incident = selectedIncident ? incidentData.find(i => i.id === selectedIncident) : null;
+  const handleSubmit = async () => {
+    if (queryText.trim()) {
+      try {
+        const response = await fetch('http://localhost:8080/NL_query', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            message: queryText,
+            incident_id: selectedIncident ? selectedIncident.toString() : '',
+          }),
+        });
+
+        if (!response.ok) {
+          throw new Error('Network response was not ok');
+        }
+
+        const data = await response.json();
+        alert(`Response: ${data.response}`);
+        setQueryText('');
+      } catch (error) {
+        console.error('Error sending query:', error);
+        alert('Failed to send query. Please try again.');
+      }
+    }
+  };
+
+  const handleVoiceQuery = () => {
+    // If already recording, stop it
+    if (isRecording && recognitionRef.current) {
+      recognitionRef.current.stop();
+      return;
+    }
+
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    
+    if (!SpeechRecognition) {
+      alert('Speech recognition is not supported in your browser. Please try Chrome or Edge.');
+      return;
+    }
+
+    const recognition = new SpeechRecognition();
+    recognitionRef.current = recognition;
+    
+    recognition.lang = 'en-US';
+    recognition.continuous = false;
+    recognition.interimResults = false;
+
+    recognition.onstart = () => {
+      setIsRecording(true);
+    };
+
+    recognition.onresult = (event: any) => {
+      const transcript = event.results[0][0].transcript;
+      setQueryText(transcript);
+      setIsRecording(false);
+      recognitionRef.current = null;
+    };
+
+    recognition.onerror = (event: any) => {
+      console.error('Speech recognition error:', event.error);
+      setIsRecording(false);
+      recognitionRef.current = null;
+      
+      if (event.error === 'aborted') {
+        // User manually stopped - this is normal, don't show error
+        return;
+      }
+      
+      if (event.error === 'not-allowed') {
+        alert('Microphone access denied. Please allow microphone access in your browser settings.');
+      } else {
+        alert(`Speech recognition error: ${event.error}`);
+      }
+    };
+
+    recognition.onend = () => {
+      setIsRecording(false);
+      recognitionRef.current = null;
+    };
+
+    recognition.start();
+  };
+
+  // Suppress unused variable warnings - these functions are kept for future use
+  void handleSubmit;
+  void handleVoiceQuery;
 
   return (
     <div className='w-4/5 p-2 bg-pink-100 border-3 border-purple-700 shadow-lg mx-1 flex flex-col h-full overflow-y-auto'>

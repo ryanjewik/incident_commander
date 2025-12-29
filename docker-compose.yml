@@ -1,39 +1,39 @@
 version: "3"
 services:
-  # datadog:
-  #   image: gcr.io/datadoghq/agent:latest
-  #   environment:
-  #     - DD_API_KEY=${DD_API_KEY}
-  #     - DD_SITE=${DD_SITE}
-  #     - DD_LOGS_ENABLED=true
-  #     - DD_LOGS_CONFIG_CONTAINER_COLLECT_ALL=true
-  #   expose:
-  #     - "8125:8125/udp"  # DogStatsD
-  #     - "8126:8126/tcp"  # APM Trace Agent
-  #   volumes:
-  #     - /var/run/docker.sock:/var/run/docker.sock:ro
-  #     - /proc/:/host/proc/:ro
-  #     - /sys/fs/cgroup/:/host/sys/fs/cgroup:ro
-  #   networks:
-  #     - dd_net
-  # dummy-app:
-  #   build:
-  #     context: ./dummy_app
-  #     dockerfile: Dockerfile
-  #   container_name: dummy-app
-  #   environment:
-  #     - DD_SERVICE=dummy-checkout
-  #     - DD_ENV=demo
-  #     - DD_VERSION=1.0.0
-  #     - DD_AGENT_HOST=datadog  # <--- key fix
-  #   ports:
-  #     - "8000:8000"
-  #   command: >
-  #     ddtrace-run python -m uvicorn app:app --host 0.0.0.0 --port 8000
-  #   depends_on:
-  #     - datadog
-  #   networks:
-  #     - dd_net
+# datadog:
+#   image: gcr.io/datadoghq/agent:latest
+#   environment:
+#     - DD_API_KEY=${DD_API_KEY}
+#     - DD_SITE=${DD_SITE}
+#     - DD_LOGS_ENABLED=true
+#     - DD_LOGS_CONFIG_CONTAINER_COLLECT_ALL=true
+#   expose:
+#     - "8125:8125/udp"  # DogStatsD
+#     - "8126:8126/tcp"  # APM Trace Agent
+#   volumes:
+#     - /var/run/docker.sock:/var/run/docker.sock:ro
+#     - /proc/:/host/proc/:ro
+#     - /sys/fs/cgroup/:/host/sys/fs/cgroup:ro
+#   networks:
+#     - dd_net
+# dummy-app:
+#   build:
+#     context: ./dummy_app
+#     dockerfile: Dockerfile
+#   container_name: dummy-app
+#   environment:
+#     - DD_SERVICE=dummy-checkout
+#     - DD_ENV=demo
+#     - DD_VERSION=1.0.0
+#     - DD_AGENT_HOST=datadog  # <--- key fix
+#   ports:
+#     - "8000:8000"
+#   command: >
+#     ddtrace-run python -m uvicorn app:app --host 0.0.0.0 --port 8000
+#   depends_on:
+#     - datadog
+#   networks:
+#     - dd_net
   frontend:
     build:
       context: ./frontend
@@ -43,6 +43,7 @@ services:
       - "3000:80"
     networks:
       - dd_net
+      
   backend:
     build:
       context: ./backend
@@ -59,19 +60,39 @@ services:
       - ./backend/firebase-service-account.json:/root/backend/firebase-service-account.json:ro
     networks:
       - dd_net
-  logs_agent:
+      
+  # logs_agent:
+  #   build:
+  #     context: ./logs_agent
+  #     dockerfile: Dockerfile
+  #   container_name: logs-agent
+  #   working_dir: /app
+  #   volumes:
+  #     - ./outputs:/app/outputs
+  #   env_file:
+  #     - .env
+  #   restart: unless-stopped
+  #   networks:
+  #     - dd_net
+      
+  metrics-agent:
     build:
-      context: ./logs_agent
+      context: ./metrics_agent
       dockerfile: Dockerfile
-    container_name: logs-agent
+    container_name: metrics-agent
     working_dir: /app
     volumes:
-      - ./logs_agent/outputs:/app/outputs
+      - ./outputs:/app/outputs
+      - ./backend/client.properties:/app/client.properties:ro
     env_file:
       - .env
-    restart: unless-stopped
+    # restart: unless-stopped  
     networks:
       - dd_net
+    command: python main.py
+    stdin_open: true
+    tty: true
+      
 networks:
   dd_net:
     driver: bridge
