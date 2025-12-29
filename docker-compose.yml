@@ -61,20 +61,6 @@ services:
     networks:
       - dd_net
       
-  # logs_agent:
-  #   build:
-  #     context: ./logs_agent
-  #     dockerfile: Dockerfile
-  #   container_name: logs-agent
-  #   working_dir: /app
-  #   volumes:
-  #     - ./outputs:/app/outputs
-  #   env_file:
-  #     - .env
-  #   restart: unless-stopped
-  #   networks:
-  #     - dd_net
-      
   metrics-agent:
     build:
       context: ./agents
@@ -101,39 +87,11 @@ services:
     container_name: moderator-agent
     working_dir: /app
     volumes:
-      - ./agents/specialized_agents/moderator_agent/outputs:/app/agents/specialized_agents/moderator_agent/outputs
-      - ./backend/firebase-service-account.json:/app/backend/firebase-service-account.json:ro
+      - ./outputs:/app/outputs
+      - ./backend/client.properties:/app/client.properties:ro
     env_file:
       - .env
-    environment:
-      - EXPECTED_AGENTS=logs_traces_agent,rca_historical_agent
-      - CLIENT_PROPERTIES_PATH=/app/common/client.properties
-      - FIREBASE_CREDENTIALS_PATH=/app/backend/firebase-service-account.json
-      - GOOGLE_APPLICATION_CREDENTIALS=/app/backend/firebase-service-account.json
-    restart: unless-stopped
-    depends_on:
-      - logs_agent
-    networks:
-      - dd_net
-  rca_historical_agent:
-    build:
-      context: ./agents
-      dockerfile: specialized_agents/rca_historical_agent/Dockerfile
-    container_name: rca-historical-agent
-    working_dir: /app/agents/specialized_agents/rca_historical_agent
-    volumes:
-      - ./agents/specialized_agents/rca_historical_agent/outputs:/app/agents/specialized_agents/rca_historical_agent/outputs
-      - ./backend/firebase-service-account.json:/app/backend/firebase-service-account.json:ro
-    env_file:
-      - .env
-    environment:
-      - CLIENT_PROPERTIES_PATH=/app/common/client.properties
-      - FIREBASE_CREDENTIALS_PATH=/app/backend/firebase-service-account.json
-      - GEMINI_API_KEY=${GEMINI_API_KEY}
-      - GOOGLE_APPLICATION_CREDENTIALS=/app/backend/firebase-service-account.json
-    restart: unless-stopped
-    depends_on:
-      - logs_agent
+    # restart: unless-stopped  
     networks:
       - dd_net
     command: python main.py
