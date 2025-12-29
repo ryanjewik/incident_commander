@@ -1,0 +1,5 @@
+confluent-kafka
+google-genai
+firebase-admin
+google-cloud-firestore
+requests

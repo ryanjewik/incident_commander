@@ -28,6 +28,7 @@ func (s *IncidentService) CreateIncident(ctx context.Context, req *models.Create
 		ID:             uuid.New().String(),
 		OrganizationID: organizationID,
 		Title:          req.Title,
+		AlertID:        req.AlertID,
 		Status:         req.Status,
 		Date:           now.Format(time.RFC3339),
 		Type:           req.Type,

@@ -311,19 +311,23 @@ func (h *DatadogWebhookHandler) HandleDatadogWebhook(c *gin.Context) {
 		}
 	}
 
-	// created_by should be monitor.alert_id
+	// extract alert_id; created_by should be monitor.alert_id if available
 	var createdBy string
+	var alertID string
 	if mon, ok := payload["monitor"].(map[string]interface{}); ok {
 		if aid, ok2 := mon["alert_id"].(string); ok2 && aid != "" {
+			alertID = aid
 			createdBy = aid
 		} else if aid2, ok3 := mon["alert_id"]; ok3 {
-			createdBy = fmt.Sprintf("%v", aid2)
+			alertID = fmt.Sprintf("%v", aid2)
+			createdBy = alertID
 		}
 	}
 
 	incident := &models.Incident{
 		ID:             eventID,
 		OrganizationID: orgID,
+		AlertID:        alertID,
 		Title:          title,
 		Status:         "New",
 		Date:           now.Format(time.RFC3339),
@@ -368,14 +372,7 @@ func (h *DatadogWebhookHandler) HandleDatadogWebhook(c *gin.Context) {
 			severity = s
 		}
 
-		var monitorID string
-		if mon, ok := raw["monitor"].(map[string]interface{}); ok {
-			if idv, ok := mon["id"].(string); ok && idv != "" {
-				monitorID = idv
-			} else if aid, ok := mon["alert_id"]; ok {
-				monitorID = fmt.Sprintf("%v", aid)
-			}
-		}
+		// no monitor_id included; keep event small
 
 		var tags []string
 		if t, ok := raw["tags"].([]interface{}); ok {
@@ -391,7 +388,7 @@ func (h *DatadogWebhookHandler) HandleDatadogWebhook(c *gin.Context) {
 			"organization_id": inc.OrganizationID,
 			"title":           inc.Title,
 			"type":            "datadog_webhook",
-			"monitor_id":      monitorID,
+			"alert_id":        inc.AlertID,
 			"tags":            tags,
 			// include full webhook payload as the raw reference
 			"raw_payload_ref": raw,

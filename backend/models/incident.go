@@ -6,6 +6,7 @@ import "time"
 type Incident struct {
 	ID             string                 `firestore:"id" json:"id"`
 	OrganizationID string                 `firestore:"organization_id" json:"organization_id"`
+	AlertID        string                 `firestore:"alert_id,omitempty" json:"alert_id,omitempty"`
 	Title          string                 `firestore:"title" json:"title"`
 	Status         string                 `firestore:"status" json:"status"` // Active, Resolved, Ignored, New
 	Date           string                 `firestore:"date" json:"date"`
@@ -21,6 +22,7 @@ type Incident struct {
 type CreateIncidentRequest struct {
 	Title       string                 `json:"title" binding:"required"`
 	Status      string                 `json:"status"`
+	AlertID     string                 `json:"alert_id,omitempty"`
 	Type        string                 `json:"type" binding:"required"`
 	Description string                 `json:"description" binding:"required"`
 	Metadata    map[string]interface{} `json:"metadata,omitempty"`
