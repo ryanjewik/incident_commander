@@ -181,20 +181,32 @@ def collect_agent_results_for_incident(
     """
     Spins up a dedicated consumer at `latest` so we only gather new agent_result messages.
     """
-    group = f"moderator-agent-{incident_id}"
-    consumer = make_consumer(kafka_cfg, group_id=group, auto_offset_reset="latest")
-    consumer.subscribe([AGENT_RESULT_TOPIC])
+    # Create a per-incident consumer (unique group) and subscribe to both
+    # `agent_started` and `agent_result` so we can use started messages as
+    # readiness signals and avoid races where agents publish before the
+    # moderator's ephemeral consumer is created.
+    group = f"moderator-agent-{incident_id}-{int(time.time())}"
+    # Use `earliest` so we don't miss near-simultaneous publishes that may
+    # have occurred just before the consumer started. We filter by
+    # `incident_id` below.
+    consumer = make_consumer(kafka_cfg, group_id=group, auto_offset_reset="earliest")
+    consumer.subscribe([AGENT_RESULT_TOPIC, AGENT_STARTED_TOPIC])
 
     deadline = time.time() + wait_seconds
-    got: Dict[str, Dict[str, Any]] = {}
+    got_results: Dict[str, Dict[str, Any]] = {}
+    seen_started: set[str] = set()
 
     try:
-        while time.time() < deadline and len(got) < len(expected_agents):
+        while time.time() < deadline:
+            # Break early if all expected agents both started and reported
+            if len(got_results) >= len(expected_agents) and len(seen_started) >= len(expected_agents):
+                break
+
             msg = consumer.poll(1.0)
             if msg is None:
                 continue
             if msg.error():
-                print(f"[{AGENT_NAME}] agent_result consumer error: {msg.error()}")
+                print(f"[{AGENT_NAME}] agent consumer error: {msg.error()}")
                 continue
 
             try:
@@ -205,22 +217,31 @@ def collect_agent_results_for_incident(
             if payload.get("incident_id") != incident_id:
                 continue
 
+            topic = msg.topic()
             agent = payload.get("agent")
             if not agent:
                 continue
 
-            # Only keep the latest message per agent
-            got[agent] = payload
+            if topic == AGENT_STARTED_TOPIC:
+                seen_started.add(agent)
+                # continue waiting for results
+                continue
 
-        # Return in stable expected order (if present)
-        out = []
+            if topic == AGENT_RESULT_TOPIC:
+                # keep latest per agent
+                got_results[agent] = payload
+
+        # Return results in stable expected order (if present)
+        out: List[Dict[str, Any]] = []
         for a in expected_agents:
-            if a in got:
-                out.append(got[a])
+            if a in got_results:
+                out.append(got_results[a])
+
         # Also include any unexpected agents that reported for this incident
-        for a, p in got.items():
+        for a, p in got_results.items():
             if a not in expected_agents:
                 out.append(p)
+
         return out
     finally:
         consumer.close()
