@@ -85,4 +85,4 @@ scripts/
 
 test.txt
 backend/backend
-logs_agent/outputs/*
+agents/**/outputs/*
