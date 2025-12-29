@@ -98,6 +98,14 @@ func Register(r *gin.Engine, app *handlers.App, userService *services.UserServic
 	// Alias for legacy path — accept Datadog configured with /datadog/webhook
 	r.POST("/datadog/webhook", ddWebhookHandler.HandleDatadogWebhook)
 
+	// Internal endpoint for agents to fetch decrypted organization secrets.
+	// Protected by Firebase auth middleware (agents must present a valid Firebase ID token).
+	internal := r.Group("/internal")
+	internal.Use(middleware.AuthMiddleware(userService))
+	{
+		internal.GET("/orgs/:orgId/secrets", ddWebhookHandler.GetOrgSecrets)
+	}
+
 	// OAuth token endpoint for client_credentials
 	r.POST("/oauth/token", oauthHandler.Token)
 

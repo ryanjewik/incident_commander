@@ -1,39 +1,5 @@
 version: "3"
 services:
-  # datadog:
-  #   image: gcr.io/datadoghq/agent:latest
-  #   environment:
-  #     - DD_API_KEY=${DD_API_KEY}
-  #     - DD_SITE=${DD_SITE}
-  #     - DD_LOGS_ENABLED=true
-  #     - DD_LOGS_CONFIG_CONTAINER_COLLECT_ALL=true
-  #   expose:
-  #     - "8125:8125/udp"  # DogStatsD
-  #     - "8126:8126/tcp"  # APM Trace Agent
-  #   volumes:
-  #     - /var/run/docker.sock:/var/run/docker.sock:ro
-  #     - /proc/:/host/proc/:ro
-  #     - /sys/fs/cgroup/:/host/sys/fs/cgroup:ro
-  #   networks:
-  #     - dd_net
-  # dummy-app:
-  #   build:
-  #     context: ./dummy_app
-  #     dockerfile: Dockerfile
-  #   container_name: dummy-app
-  #   environment:
-  #     - DD_SERVICE=dummy-checkout
-  #     - DD_ENV=demo
-  #     - DD_VERSION=1.0.0
-  #     - DD_AGENT_HOST=datadog  # <--- key fix
-  #   ports:
-  #     - "8000:8000"
-  #   command: >
-  #     ddtrace-run python -m uvicorn app:app --host 0.0.0.0 --port 8000
-  #   depends_on:
-  #     - datadog
-  #   networks:
-  #     - dd_net
   frontend:
     build:
       context: ./frontend
@@ -61,15 +27,36 @@ services:
       - dd_net
   logs_agent:
     build:
-      context: ./logs_agent
-      dockerfile: Dockerfile
+      context: ./agents
+      dockerfile: specialized_agents/logs_traces_agent/Dockerfile
     container_name: logs-agent
-    working_dir: /app
+    working_dir: /app/agents/specialized_agents/logs_traces_agent
     volumes:
-      - ./logs_agent/outputs:/app/outputs
+      - ./agents/specialized_agents/logs_traces_agent/outputs:/app/agents/specialized_agents/logs_traces_agent/outputs
     env_file:
       - .env
+    environment:
+      - DD_MAX_CONCURRENT=1
+      - CLIENT_PROPERTIES_PATH=/app/common/client.properties
     restart: unless-stopped
+    networks:
+      - dd_net
+  moderator-agent:
+    build:
+      context: ./agents
+      dockerfile: specialized_agents/moderator_agent/Dockerfile
+    container_name: moderator-agent
+    working_dir: /app
+    volumes:
+      - ./agents/specialized_agents/moderator_agent/outputs:/app/agents/specialized_agents/moderator_agent/outputs
+    env_file:
+      - .env
+    environment:
+      - EXPECTED_AGENTS=logs_traces_agent
+      - CLIENT_PROPERTIES_PATH=/app/common/client.properties
+    restart: unless-stopped
+    depends_on:
+      - logs_agent
     networks:
       - dd_net
 networks:

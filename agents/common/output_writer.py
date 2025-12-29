@@ -12,10 +12,6 @@ def write_agent_artifacts(
     payload: Dict[str, Any],
     base_dir: str = "outputs",
 ) -> Dict[str, str]:
-    """
-    Writes both JSON + TXT for manual inspection.
-    Return paths so caller can include them in the Kafka agent_result message.
-    """
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     out_dir = Path(base_dir) / incident_id
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -25,7 +21,6 @@ def write_agent_artifacts(
 
     json_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
 
-    # Human-readable TXT
     lines = []
     lines.append(f"agent: {agent_name}")
     lines.append(f"incident_id: {incident_id}")
