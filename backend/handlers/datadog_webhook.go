@@ -13,6 +13,8 @@ import (
 	"github.com/ryanjewik/incident_commander/backend/models"
 	"github.com/ryanjewik/incident_commander/backend/services"
 
+	"github.com/ryanjewik/incident_commander/backend/middleware"
+
 	//confluent test
 	"bufio"
 	"strings"
@@ -44,68 +46,21 @@ func ReadConfig() kafka.ConfigMap {
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
-		if !strings.HasPrefix(line, "#") && len(line) != 0 {
-			kv := strings.Split(line, "=")
-			parameter := strings.TrimSpace(kv[0])
-			value := strings.TrimSpace(kv[1])
-			m[parameter] = value
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) == 2 {
+			key := strings.TrimSpace(parts[0])
+			val := strings.TrimSpace(parts[1])
+			m[key] = val
 		}
 	}
-
 	if err := scanner.Err(); err != nil {
-		fmt.Printf("Failed to read file: %s", err)
+		fmt.Fprintf(os.Stderr, "Failed to read client.properties: %v", err)
 		os.Exit(1)
 	}
-
 	return m
-}
-
-func produce(topic string, key []byte, value []byte, config kafka.ConfigMap) {
-	// creates a new producer instance
-	// ensure topic exists (best effort)
-	if err := ensureTopicExists(topic, config); err != nil {
-		log.Printf("[kafka] ensureTopicExists warning: %v", err)
-	}
-
-	p, err := kafka.NewProducer(&config)
-	if err != nil {
-		fmt.Printf("failed to create kafka producer: %v\n", err)
-		return
-	}
-
-	// go-routine to handle message delivery reports and possibly other events
-	go func() {
-		for e := range p.Events() {
-			switch ev := e.(type) {
-			case *kafka.Message:
-				if ev.TopicPartition.Error != nil {
-					fmt.Printf("Failed to deliver message: %v\n", ev.TopicPartition)
-				} else {
-					fmt.Printf("Produced event to topic %s: key = %-10s\n",
-						*ev.TopicPartition.Topic, string(ev.Key))
-				}
-			}
-		}
-	}()
-
-	// produce the provided message
-	p.Produce(&kafka.Message{
-		TopicPartition: kafka.TopicPartition{Topic: &topic, Partition: kafka.PartitionAny},
-		Key:            key,
-		Value:          value,
-	}, nil)
-
-	// flush and close — check remaining messages to help diagnose delivery issues
-	remaining := p.Flush(30 * 1000)
-	if remaining > 0 {
-		log.Printf("[kafka] producer flush returned %d undelivered messages", remaining)
-		// try a short additional flush
-		remaining = p.Flush(10 * 1000)
-		if remaining > 0 {
-			log.Printf("[kafka] producer still has %d undelivered messages after retries", remaining)
-		}
-	}
-	p.Close()
 }
 
 // ensureTopicExists attempts to create the topic if it does not exist using the AdminClient.
@@ -142,6 +97,47 @@ func ensureTopicExists(topic string, config kafka.ConfigMap) error {
 		}
 	}
 	return nil
+}
+
+// produce sends a single message to Kafka using the provided config.
+// This is a lightweight helper used by handlers that don't have a long-lived
+// producer instance available in the handler scope.
+func produce(topic string, key []byte, value []byte, config kafka.ConfigMap) {
+	p, err := kafka.NewProducer(&config)
+	if err != nil {
+		log.Printf("[kafka] failed to create producer: %v", err)
+		return
+	}
+	defer p.Close()
+
+	go func() {
+		for e := range p.Events() {
+			switch ev := e.(type) {
+			case *kafka.Message:
+				if ev.TopicPartition.Error != nil {
+					log.Printf("[kafka] delivery failed: %v", ev.TopicPartition.Error)
+				} else {
+					log.Printf("[kafka] delivered message to %v", ev.TopicPartition)
+				}
+			}
+		}
+	}()
+
+	msg := &kafka.Message{
+		TopicPartition: kafka.TopicPartition{Topic: &topic, Partition: kafka.PartitionAny},
+		Value:          value,
+		Key:            key,
+	}
+
+	if err := p.Produce(msg, nil); err != nil {
+		log.Printf("[kafka] produce error: %v", err)
+	}
+
+	// Flush for up to 5s
+	remaining := p.Flush(5000)
+	if remaining > 0 {
+		log.Printf("[kafka] producer has %d undelivered messages after flush", remaining)
+	}
 }
 
 func consume(topic string, config kafka.ConfigMap) {
@@ -315,19 +311,23 @@ func (h *DatadogWebhookHandler) HandleDatadogWebhook(c *gin.Context) {
 		}
 	}
 
-	// created_by should be monitor.alert_id
+	// extract alert_id; created_by should be monitor.alert_id if available
 	var createdBy string
+	var alertID string
 	if mon, ok := payload["monitor"].(map[string]interface{}); ok {
 		if aid, ok2 := mon["alert_id"].(string); ok2 && aid != "" {
+			alertID = aid
 			createdBy = aid
 		} else if aid2, ok3 := mon["alert_id"]; ok3 {
-			createdBy = fmt.Sprintf("%v", aid2)
+			alertID = fmt.Sprintf("%v", aid2)
+			createdBy = alertID
 		}
 	}
 
 	incident := &models.Incident{
 		ID:             eventID,
 		OrganizationID: orgID,
+		AlertID:        alertID,
 		Title:          title,
 		Status:         "New",
 		Date:           now.Format(time.RFC3339),
@@ -372,14 +372,7 @@ func (h *DatadogWebhookHandler) HandleDatadogWebhook(c *gin.Context) {
 			severity = s
 		}
 
-		var monitorID string
-		if mon, ok := raw["monitor"].(map[string]interface{}); ok {
-			if idv, ok := mon["id"].(string); ok && idv != "" {
-				monitorID = idv
-			} else if aid, ok := mon["alert_id"]; ok {
-				monitorID = fmt.Sprintf("%v", aid)
-			}
-		}
+		// no monitor_id included; keep event small
 
 		var tags []string
 		if t, ok := raw["tags"].([]interface{}); ok {
@@ -395,7 +388,7 @@ func (h *DatadogWebhookHandler) HandleDatadogWebhook(c *gin.Context) {
 			"organization_id": inc.OrganizationID,
 			"title":           inc.Title,
 			"type":            "datadog_webhook",
-			"monitor_id":      monitorID,
+			"alert_id":        inc.AlertID,
 			"tags":            tags,
 			// include full webhook payload as the raw reference
 			"raw_payload_ref": raw,
@@ -433,4 +426,130 @@ func (h *DatadogWebhookHandler) HandleDatadogWebhook(c *gin.Context) {
 	}(payload)
 
 	c.JSON(http.StatusCreated, incident)
+}
+
+// GetOrgSecrets returns decrypted secrets for an organization.
+// Protected by a simple bearer token (AGENT_AUTH_TOKEN) to authenticate agents.
+func (h *DatadogWebhookHandler) GetOrgSecrets(c *gin.Context) {
+	// Allow Firebase-authenticated callers. If caller belongs to the org, allow.
+	// Otherwise, allow when the caller UID is explicitly mapped to one or more orgs via
+	// AGENT_UID_ORG_MAP (format: "uid1:orgA|orgB,uid2:orgC") or via AGENT_DEFAULT_ORG/AGENT_ID_UID.
+	requesterOrg := middleware.GetOrgID(c)
+	callerUID := middleware.GetUserID(c)
+	orgId := c.Param("orgId")
+	if orgId == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "missing orgId"})
+		return
+	}
+
+	allowed := false
+	if requesterOrg != "" && requesterOrg == orgId {
+		allowed = true
+	}
+
+	// If not allowed yet, consult environment mappings for agent UIDs
+	if !allowed {
+		// Check AGENT_UID_ORG_MAP env var: comma-separated uid:orgList pairs
+		mapEnv := os.Getenv("AGENT_UID_ORG_MAP")
+		if mapEnv != "" && callerUID != "" {
+			for _, pair := range strings.Split(mapEnv, ",") {
+				kv := strings.SplitN(strings.TrimSpace(pair), ":", 2)
+				if len(kv) != 2 {
+					continue
+				}
+				uid := kv[0]
+				orgList := kv[1]
+				if uid != callerUID {
+					continue
+				}
+				// orgList may be separated by | or ; or ,
+				var orgs []string
+				if strings.Contains(orgList, "|") {
+					orgs = strings.Split(orgList, "|")
+				} else if strings.Contains(orgList, ";") {
+					orgs = strings.Split(orgList, ";")
+				} else if strings.Contains(orgList, ",") {
+					orgs = strings.Split(orgList, ",")
+				} else {
+					orgs = []string{orgList}
+				}
+				for _, o := range orgs {
+					if strings.TrimSpace(o) == orgId {
+						allowed = true
+						break
+					}
+				}
+				if allowed {
+					break
+				}
+			}
+		}
+
+		// Allow a globally trusted agent UID (AGENT_ID_UID) to fetch any org's secrets.
+		agentUID := os.Getenv("AGENT_ID_UID")
+		if agentUID != "" && callerUID == agentUID {
+			allowed = true
+		}
+
+		// Also allow a list of trusted UIDs via AGENT_TRUSTED_UIDS (comma-separated)
+		trustedList := os.Getenv("AGENT_TRUSTED_UIDS")
+		if !allowed && trustedList != "" && callerUID != "" {
+			for _, t := range strings.Split(trustedList, ",") {
+				if strings.TrimSpace(t) == callerUID {
+					allowed = true
+					break
+				}
+			}
+		}
+	}
+
+	if !allowed {
+		c.JSON(http.StatusForbidden, gin.H{"error": "forbidden - caller not authorized for requested organization"})
+		return
+	}
+	if orgId == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "missing orgId"})
+		return
+	}
+
+	ctx := context.Background()
+	// lookup organization document (stored under `organizations` by admin flows)
+	doc, err := h.firebaseService.Firestore.Collection("organizations").Doc(orgId).Get(ctx)
+	if err != nil || !doc.Exists() {
+		c.JSON(http.StatusNotFound, gin.H{"error": "organization not found"})
+		return
+	}
+
+	data := doc.Data()
+	dsRaw, ok := data["datadog_secrets"]
+	if !ok {
+		c.JSON(http.StatusNotFound, gin.H{"error": "datadog secrets not configured"})
+		return
+	}
+
+	dsMap, ok := dsRaw.(map[string]interface{})
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "malformed secrets document"})
+		return
+	}
+
+	encryptedAPI, _ := dsMap["encrypted_apiKey"].(string)
+	encryptedApp, _ := dsMap["encrypted_appKey"].(string)
+	wrappedDEK, _ := dsMap["encrypted_apiKeyDek"].(string)
+
+	if encryptedAPI == "" && encryptedApp == "" {
+		c.JSON(http.StatusNotFound, gin.H{"error": "no encrypted keys present"})
+		return
+	}
+
+	apiPlain, appPlain, err := services.DecryptData(encryptedAPI, encryptedApp, wrappedDEK)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "decrypt failed"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"datadog_api_key": apiPlain,
+		"datadog_app_key": appPlain,
+	})
 }

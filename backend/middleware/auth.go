@@ -3,6 +3,7 @@ package middleware
 import (
 	"log"
 	"net/http"
+	"os"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -88,6 +89,30 @@ func AuthMiddleware(userService *services.UserService) gin.HandlerFunc {
 			len(user.OrganizationID),
 			user.OrganizationID == "",
 			user.OrganizationID == "default")
+
+		// If the Firestore user has no organization set, allow mapping agent UIDs to orgs
+		if user.OrganizationID == "" || user.OrganizationID == "default" {
+			// Map format: AGENT_UID_ORG_MAP="uid1:org1,uid2:org2"
+			mapEnv := os.Getenv("AGENT_UID_ORG_MAP")
+			mapped := ""
+			if mapEnv != "" {
+				for _, pair := range strings.Split(mapEnv, ",") {
+					kv := strings.SplitN(strings.TrimSpace(pair), ":", 2)
+					if len(kv) == 2 && kv[0] == decodedToken.UID {
+						mapped = kv[1]
+						break
+					}
+				}
+			}
+			// Fallback: if AGENT_ID_UID and AGENT_DEFAULT_ORG are set and UID matches, use it
+			// Note: AGENT_DEFAULT_ORG fallback removed — prefer explicit AGENT_UID_ORG_MAP or
+			// Firestore user records to grant organization membership to non-interactive agents.
+
+			if mapped != "" {
+				user.OrganizationID = mapped
+				log.Printf("[Auth] Mapped agent UID %s to organizationID: %s via env", decodedToken.UID, mapped)
+			}
+		}
 
 		// Set organization ID in context if user belongs to an organization
 		if user.OrganizationID != "" && user.OrganizationID != "default" {

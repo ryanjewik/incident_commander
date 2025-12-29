@@ -28,6 +28,11 @@ func main() {
 	}
 	defer firebaseService.Close()
 
+	// start moderator decision consumer (if KAFKA_BOOTSTRAP_SERVERS is set)
+	if err := services.StartModeratorConsumer(firebaseService); err != nil {
+		log.Printf("failed to start moderator consumer: %v", err)
+	}
+
 	userService := services.NewUserService(firebaseService)
 	incidentService := services.NewIncidentService(firebaseService)
 
