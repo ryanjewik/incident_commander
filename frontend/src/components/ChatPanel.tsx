@@ -1,5 +1,11 @@
 import { useState, useRef, useEffect } from 'react';
 import { apiService, wsManager } from '../services/api';
+import { useAuth } from '../contexts/AuthContext';
+import PerformanceMetrics from './dashboard_dummies/PerformanceMetrics';
+import IncidentTimeline from './dashboard_dummies/IncidentTimeline';
+import StatusDistribution from './dashboard_dummies/StatusDistribution';
+import SystemHealth from './dashboard_dummies/SystemHealth';
+import RecentLogs from './dashboard_dummies/RecentLogs';
 import type { Message } from '../services/api';
 
 interface ChatPanelProps {
@@ -28,6 +34,8 @@ const getUserColor = (userName: string): string => {
 };
 
 function ChatPanel({ incidentId, title }: ChatPanelProps) {
+  const { userData } = useAuth();
+  const [ddConfigured, setDdConfigured] = useState<boolean | null>(null);
   const [queryText, setQueryText] = useState('');
   const [isRecording, setIsRecording] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -67,6 +75,41 @@ function ChatPanel({ incidentId, title }: ChatPanelProps) {
       wsManager.disconnect();
     };
   }, [incidentId]);
+
+  // When no incident selected, check datadog config for organization to decide placeholders
+  useEffect(() => {
+    if (incidentId) return;
+    let mounted = true;
+    const orgId = userData?.organization_id;
+    if (!orgId) {
+      setDdConfigured(false);
+      return;
+    }
+    setDdConfigured(null);
+    // Fetch organization doc to read datadog_settings and datadog_secrets presence
+    apiService.getOrganization(orgId).then((org: any) => {
+      if (!mounted) return;
+      const settings = (org && org.datadog_settings) ? org.datadog_settings : {};
+      const secrets = (org && org.datadog_secrets) ? org.datadog_secrets : null;
+      // If no secrets present at all, treat as not configured
+      const hasSecrets = secrets && (secrets.encrypted_apiKey || secrets.encrypted_appKey || secrets.apiKey || secrets.appKey);
+      // Determine which panels to show according to toggles
+      // Map toggles: activityFeed -> IncidentTimeline/StatusDistribution
+      // systemMetrics -> PerformanceMetrics
+      // liveLogs -> RecentLogs
+      // alertStatus -> SystemHealth
+      const showActivity = Boolean(settings.activityFeed === true || settings.activityFeed === 'true');
+      const showSystem = Boolean(settings.systemMetrics === true || settings.systemMetrics === 'true');
+      const showLiveLogs = Boolean(settings.liveLogs === true || settings.liveLogs === 'true');
+      const showAlertStatus = Boolean(settings.alertStatus === true || settings.alertStatus === 'true');
+      // store these in ddConfigured as an object for rendering decisions
+      setDdConfigured(hasSecrets ? { showActivity, showSystem, showLiveLogs, showAlertStatus } : false as any);
+    }).catch(() => {
+      if (!mounted) return;
+      setDdConfigured(false);
+    });
+    return () => { mounted = false; };
+  }, [incidentId, userData?.organization_id]);
 
   const connectWebSocket = async () => {
     try {
@@ -236,7 +279,7 @@ function ChatPanel({ incidentId, title }: ChatPanelProps) {
     <div className='flex flex-col h-full bg-white rounded border-2 border-pink-300'>
       <div className='flex items-center justify-between p-2 border-b-2 border-pink-300 flex-shrink-0'>
         <h3 className='text-sm font-semibold text-purple-700'>
-          {title || (incidentId ? 'Incident Chat' : 'NL Query')}
+          {title || (incidentId ? 'Incident Chat' : '')}
         </h3>
         <div className='flex items-center gap-2'>
           <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-500' : 'bg-red-500'}`} />
@@ -249,34 +292,79 @@ function ChatPanel({ incidentId, title }: ChatPanelProps) {
         {isLoadingMessages ? (
           <p className='text-gray-500 text-center text-xs'>Loading messages...</p>
         ) : (
-          <div className='space-y-2'>
-            {messages.map((msg) => {
-              const isCurrentUser = msg.user_name === currentUserName;
-              const bgColor = isCurrentUser ? 'bg-purple-300' : getUserColor(msg.user_name);
-              
-              return (
-                <div 
-                  key={msg.id} 
-                  className={`flex ${isCurrentUser ? 'justify-end' : 'justify-start'}`}
-                >
-                  <div 
-                    className={`${bgColor} p-2 rounded-lg border border-gray-200 max-w-[60%]`}
-                    style={{ wordWrap: 'break-word' }}
-                  >
-                    <div className='flex items-center gap-2 mb-0.5'>
-                      <span className='font-semibold text-gray-800 text-xs'>{msg.user_name}</span>
-                      <span className='text-[10px] text-gray-600'>
-                        {new Date(msg.created_at).toLocaleString()}
-                      </span>
+          <>
+                {/* If no incident selected, render dashboard components or a placeholder if Datadog isn't configured */}
+                {!incidentId && (
+                  ddConfigured === false ? (
+                    <div className='bg-white p-6 rounded border-2 border-purple-600 text-center'>
+                      <h4 className='text-lg font-semibold text-purple-700 mb-2'>Datadog API keys not configured</h4>
+                      <p className='text-gray-600 mb-4'>This organization does not have Datadog API keys set. Ask an administrator to add the Datadog API & APP keys in the Admin panel to enable dashboards and logs.</p>
+                      <div className='flex justify-center'>
+                        <button
+                          onClick={() => window.dispatchEvent(new Event('openOrganizations'))}
+                          className='bg-purple-700 text-white px-4 py-2 rounded-md hover:bg-purple-800'
+                        >
+                          Open Organizations
+                        </button>
+                      </div>
                     </div>
-                    <p className={`text-gray-900 text-xs text-left ${msg.mentions_bot ? 'font-medium' : ''}`}>
-                      {msg.text}
-                    </p>
+                  ) : ddConfigured == null ? (
+                    <div className='text-center text-gray-500'>Checking organization configuration…</div>
+                  ) : (
+                    (() => {
+                      // ddConfigured is an object with boolean flags
+                      const cfg: any = ddConfigured as any;
+                      const showSystem = !!cfg.showSystem;
+                      const showActivity = !!cfg.showActivity;
+                      const showLiveLogs = !!cfg.showLiveLogs;
+                      const showAlertStatus = !!cfg.showAlertStatus;
+                      return (
+                        <div className='space-y-6'>
+                          {showSystem ? <PerformanceMetrics /> : <div className='p-2 text-sm text-gray-500'>System metrics disabled</div>}
+                          <div className='grid grid-cols-2 gap-6'>
+                            {showActivity ? <IncidentTimeline /> : <div className='p-2 text-sm text-gray-500'>Activity feed disabled</div>}
+                            {showActivity ? <StatusDistribution /> : <div className='p-2 text-sm text-gray-500'>Activity feed disabled</div>}
+                          </div>
+                          <div className='grid grid-cols-2 gap-6'>
+                            {showAlertStatus ? <SystemHealth /> : <div className='p-2 text-sm text-gray-500'>Alert status disabled</div>}
+                            {showLiveLogs ? <RecentLogs /> : <div className='p-2 text-sm text-gray-500'>Live logs disabled</div>}
+                          </div>
+                        </div>
+                      );
+                    })()
+                  )
+                )}
+
+            {/* Messages list (for incident chats or general NL query responses) */}
+            <div className='space-y-2 mt-4'>
+              {messages.map((msg) => {
+                const isCurrentUser = msg.user_name === currentUserName;
+                const bgColor = isCurrentUser ? 'bg-purple-300' : getUserColor(msg.user_name);
+                
+                return (
+                  <div 
+                    key={msg.id} 
+                    className={`flex ${isCurrentUser ? 'justify-end' : 'justify-start'}`}
+                  >
+                    <div 
+                      className={`${bgColor} p-2 rounded-lg border border-gray-200 max-w-[60%]`}
+                      style={{ wordWrap: 'break-word' }}
+                    >
+                      <div className='flex items-center gap-2 mb-0.5'>
+                        <span className='font-semibold text-gray-800 text-xs'>{msg.user_name}</span>
+                        <span className='text-[10px] text-gray-600'>
+                          {new Date(msg.created_at).toLocaleString()}
+                        </span>
+                      </div>
+                      <p className={`text-gray-900 text-xs text-left ${msg.mentions_bot ? 'font-medium' : ''}`}>
+                        {msg.text}
+                      </p>
+                    </div>
                   </div>
-                </div>
-              );
-            })}
-          </div>
+                );
+              })}
+            </div>
+          </>
         )}
       </div>
       <div className='flex-shrink-0 bg-gradient-to-r from-purple-500 to-pink-500 p-3 rounded-b'>

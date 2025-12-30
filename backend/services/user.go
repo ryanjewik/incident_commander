@@ -428,7 +428,8 @@ func (us *UserService) UpdateOrganizationDatadog(ctx context.Context, orgID stri
 
 	// Apply settings per-field to avoid replacing the map unintentionally
 	if settings != nil {
-		toggleKeys := []string{"systemMetrics", "alertStatus", "activityFeed", "securitySignals", "liveLogs"}
+		// Note: `securitySignals` toggle removed — treat missing toggles as false by default
+		toggleKeys := []string{"systemMetrics", "alertStatus", "activityFeed", "liveLogs"}
 		for _, k := range toggleKeys {
 			if v, ok := settings[k]; ok {
 				// coerce to bool when possible

@@ -457,6 +457,16 @@ export const apiService = {
     });
   },
 
+  getOrganization: (orgId: string) => {
+    // Some deployments may not expose a direct GET /organizations/:orgId endpoint.
+    // Fall back to fetching the user's organizations and find the matching ID.
+    return api.get<Organization[]>(`/api/auth/my-organizations`).then((res: AxiosResponse<Organization[]>) => {
+      const orgs = res.data || [];
+      const found = orgs.find(o => o.id === orgId);
+      return found || null;
+    });
+  },
+
   setActiveOrganization: (organizationId: string) => {
     return api.post(`/api/auth/organizations/active`, { organization_id: organizationId }).then((res: AxiosResponse) => {
       return res.data;

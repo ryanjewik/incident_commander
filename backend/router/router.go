@@ -78,6 +78,7 @@ func Register(r *gin.Engine, app *handlers.App, userService *services.UserServic
 		protected.GET("/my-organizations", authHandler.GetMyOrganizations)
 		protected.POST("/organizations/active", authHandler.SetActiveOrganization)
 		protected.POST("/organizations/:orgId/datadog-secrets", authHandler.SaveDatadogSecrets)
+		protected.GET("/organizations/:orgId", authHandler.GetOrganization)
 	}
 
 	// Protected incident routes
