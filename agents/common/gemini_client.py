@@ -1,347 +1,126 @@
 from __future__ import annotations
-
-import json
-import re
-import time
-import random
-from typing import Any, Dict, List, Optional, Tuple
-
+from typing import Optional, Tuple, Any, Dict
 from google import genai
 from google.genai import types
 
-
 def build_gemini_client(api_key: str) -> genai.Client:
+    """Build a Gemini client with the new API."""
     return genai.Client(api_key=api_key)
 
+def analyze_metrics_with_gemini(
+    client: genai.Client,
+    model: str,
+    incident_context: Dict[str, Any],
+    snapshot_png_bytes: Optional[bytes] = None,
+    api_keys: list[str] = None,
+    current_key_index: int = 0,
+) -> Tuple[str, int]:
+    """Analyze metrics using Gemini with the new API."""
+    
+    # Build the prompt
+    prompt = f"""Analyze this incident based on the following context:
+    
+Incident ID: {incident_context.get('incident_id')}
+Monitor: {incident_context.get('monitor', {}).get('title')}
+Time Window: {incident_context.get('time_window_ms')}
+
+Timeseries Data:
+{incident_context.get('timeseries')}
+
+Provide a detailed analysis of what might have caused this incident.
+"""
+    
+    contents = [prompt]
+    
+    # Add image if available
+    if snapshot_png_bytes:
+        contents.append(types.Part.from_bytes(
+            data=snapshot_png_bytes,
+            mime_type="image/png"
+        ))
+    
+    try:
+        response = client.models.generate_content(
+            model=model,
+            contents=contents
+        )
+        return response.text, current_key_index
+    except Exception as e:
+        print(f"[gemini_client] Error with key index {current_key_index}: {e}")
+        
+        # Try next API key if available
+        if api_keys and current_key_index < len(api_keys) - 1:
+            next_index = current_key_index + 1
+            print(f"[gemini_client] Retrying with key index {next_index}")
+            new_client = genai.Client(api_key=api_keys[next_index])
+            return analyze_metrics_with_gemini(
+                client=new_client,
+                model=model,
+                incident_context=incident_context,
+                snapshot_png_bytes=snapshot_png_bytes,
+                api_keys=api_keys,
+                current_key_index=next_index,
+            )
+        raise
 
 def analyze_incident_with_gemini(
-    *,
     client: genai.Client,
     model: str,
     incident_context: Dict[str, Any],
-    snapshot_png_bytes: Optional[bytes],
-) -> Dict[str, Any]:
-    system_instructions = (
-        "You are an incident response assistant. "
-        "Return STRICT JSON only (no markdown, no code fences). "
-        "Include a 'reasoning' field explaining why you believe your hypotheses/actions are correct. "
-        "Be concrete: cite which evidence (logs/traces/aggregations) led you there."
-    )
-
-    prompt_obj = {
-        "task": "Analyze incident using logs + traces context and propose next actions.",
-        "output_schema": {
-            "summary": "string",
-            "impact_guess": "string",
-            "top_findings": ["string"],
-            "evidence": [{"type": "string", "detail": "string"}],
-            "hypotheses_ranked": [{"hypothesis": "string", "confidence": "number", "why": "string"}],
-            "recommended_actions_ranked": [{"action": "string", "priority": "string", "why": "string"}],
-            "queries_used": [{"system": "string", "query": "string"}],
-            "reasoning": "string",
-        },
-        "context": incident_context,
-    }
-
-    prompt_text = system_instructions + "\n\n" + json.dumps(prompt_obj, ensure_ascii=False)
-
-    def _make_text_part(text: str):
-        try:
-            return types.Part.from_text(text)
-        except TypeError:
-            try:
-                return types.Part(text=text)
-            except Exception:
-                return text
-        except Exception:
-            return text
-
-    def _make_bytes_part(b: bytes):
-        try:
-            return types.Part.from_bytes(data=b, mime_type="image/png")
-        except Exception:
-            try:
-                return types.Part(data=b, mime_type="image/png")
-            except Exception:
-                return b
-
-    if snapshot_png_bytes:
-        contents = [
-            _make_text_part(prompt_text),
-            _make_bytes_part(snapshot_png_bytes),
-        ]
-    else:
-        contents = [_make_text_part(prompt_text)]
-
-    config = None
-    try:
-        config = types.GenerateContentConfig(
-            temperature=0.2,
-            response_mime_type="application/json",
-        )
-    except Exception:
-        config = None
-
-    resp = None
-    attempts = 0
-    max_attempts = 3
-    while attempts < max_attempts:
-        try:
-            if config is not None:
-                resp = client.models.generate_content(model=model, contents=contents, config=config)
-            else:
-                resp = client.models.generate_content(model=model, contents=contents)
-            break
-        except Exception as e:
-            s = str(e)
-            if "RESOURCE_EXHAUSTED" in s or "429" in s or "quota" in s.lower() or "RATE_LIMIT_EXCEEDED" in s:
-                m = re.search(r"retryDelay[^0-9]*([0-9]+)s", s)
-                if m:
-                    wait = int(m.group(1))
-                else:
-                    wait = min(2 ** attempts, 60)
-                wait = wait + random.uniform(0, 1)
-                attempts += 1
-                print(f"[gemini_client] rate-limited/quota (attempt {attempts}), retrying in {wait:.1f}s: {e}")
-                time.sleep(wait)
-                continue
-            return {
-                "summary": "Gemini request failed.",
-                "raw_error": s,
-                "reasoning": "Gemini SDK call raised an exception.",
-            }
-
-    if resp is None:
-        return {
-            "summary": "Gemini request failed after retries (quota or rate limit).",
-            "raw_error": s if 's' in locals() else "unknown",
-            "reasoning": "Quota exhausted or persistent rate limiting. Retry later.",
-        }
-
-    text = getattr(resp, "text", None)
-    if not text:
-        try:
-            cands = getattr(resp, "candidates", None) or []
-            if cands:
-                content = getattr(cands[0], "content", None)
-                if content and getattr(content, "parts", None):
-                    parts = content.parts
-                    if parts:
-                        text = getattr(parts[0], "text", None) or str(parts[0])
-        except Exception:
-            text = None
-
-    if not text:
-        text = str(resp)
-
-    return _safe_json_parse(text)
-
-
-def analyze_metrics_with_gemini(
-    *,
-    client: genai.Client,
-    model: str,
-    incident_context: Dict[str, Any],
-    snapshot_png_bytes: Optional[bytes],
-    api_keys: List[str],
-    current_key_index: int,
-) -> Tuple[Dict[str, Any], int]:
-    system_instructions = (
-        "You are a metrics and monitoring specialist. "
-        "Return STRICT JSON only (no markdown, no code fences). "
-        "Include a 'reasoning' field explaining your analysis. "
-        "Focus on timeseries patterns, threshold breaches, and anomalies."
-    )
-
-    prompt_obj = {
-        "task": "Analyze incident using metrics/timeseries data and propose next actions.",
-        "output_schema": {
-            "summary": "string",
-            "impact_guess": "string",
-            "top_findings": ["string"],
-            "evidence": [{"type": "string", "detail": "string"}],
-            "hypotheses_ranked": [{"hypothesis": "string", "confidence": "number", "why": "string"}],
-            "recommended_actions_ranked": [{"action": "string", "priority": "string", "why": "string"}],
-            "queries_used": [{"system": "string", "query": "string"}],
-            "reasoning": "string",
-        },
-        "context": incident_context,
-    }
-
-    prompt_text = system_instructions + "\n\n" + json.dumps(prompt_obj, ensure_ascii=False)
-
-    def _make_text_part(text: str):
-        try:
-            return types.Part.from_text(text)
-        except TypeError:
-            try:
-                return types.Part(text=text)
-            except Exception:
-                return text
-        except Exception:
-            return text
-
-    def _make_bytes_part(b: bytes):
-        try:
-            return types.Part.from_bytes(data=b, mime_type="image/png")
-        except Exception:
-            try:
-                return types.Part(data=b, mime_type="image/png")
-            except Exception:
-                return b
-
-    if snapshot_png_bytes:
-        contents = [
-            _make_text_part(prompt_text),
-            _make_bytes_part(snapshot_png_bytes),
-        ]
-    else:
-        contents = [_make_text_part(prompt_text)]
-
-    config = None
-    try:
-        config = types.GenerateContentConfig(
-            temperature=0.2,
-            response_mime_type="application/json",
-        )
-    except Exception:
-        config = None
-
-    max_attempts = len(api_keys) * 2
-    attempts = 0
-    last_error = None
-
-    while attempts < max_attempts:
-        try:
-            if config is not None:
-                resp = client.models.generate_content(model=model, contents=contents, config=config)
-            else:
-                resp = client.models.generate_content(model=model, contents=contents)
-            
-            text = getattr(resp, "text", None)
-            if not text:
-                try:
-                    cands = getattr(resp, "candidates", None) or []
-                    if cands:
-                        content = getattr(cands[0], "content", None)
-                        if content and getattr(content, "parts", None):
-                            parts = content.parts
-                            if parts:
-                                text = getattr(parts[0], "text", None) or str(parts[0])
-                except Exception:
-                    text = None
-
-            if not text:
-                text = str(resp)
-
-            return _safe_json_parse(text), current_key_index
-
-        except Exception as e:
-            last_error = e
-            s = str(e)
-            if "RESOURCE_EXHAUSTED" in s or "429" in s or "quota" in s.lower() or "RATE_LIMIT_EXCEEDED" in s:
-                attempts += 1
-                current_key_index = (current_key_index + 1) % len(api_keys)
-                next_key = api_keys[current_key_index]
-                print(f"[gemini_client] metrics agent quota exceeded, rotating to key index {current_key_index}")
-                
-                try:
-                    client = genai.Client(api_key=next_key)
-                except Exception as rotate_err:
-                    print(f"[gemini_client] failed to rotate to key {current_key_index}: {rotate_err}")
-                
-                m = re.search(r"retryDelay[^0-9]*([0-9]+)s", s)
-                if m:
-                    wait = int(m.group(1))
-                else:
-                    wait = min(2 ** (attempts % 3), 30)
-                wait = wait + random.uniform(0, 1)
-                print(f"[gemini_client] retrying in {wait:.1f}s (attempt {attempts})")
-                time.sleep(wait)
-                continue
-            
-            return {
-                "summary": "Gemini request failed.",
-                "raw_error": s,
-                "reasoning": "Gemini SDK call raised an exception.",
-            }, current_key_index
-
-    return {
-        "summary": "Gemini request failed after all retries and key rotations.",
-        "raw_error": str(last_error) if last_error else "unknown",
-        "reasoning": "Quota exhausted across all API keys or persistent errors.",
-    }, current_key_index
-
-
-def _safe_json_parse(text: str) -> Dict[str, Any]:
-    if not isinstance(text, str):
-        return {"summary": "Gemini returned non-text output.", "raw": str(text), "reasoning": "N/A"}
-
-    stripped = text.strip()
-    if stripped.startswith("```"):
-        parts = stripped.split("\n")
-        if parts and parts[0].startswith("```"):
-            parts = parts[1:]
-        if parts and parts[-1].strip().startswith("```"):
-            parts = parts[:-1]
-        stripped = "\n".join(parts).strip()
-
-    try:
-        return json.loads(stripped)
-    except Exception:
-        return {"summary": "Gemini did not return valid JSON.", "raw": text, "reasoning": "N/A"}
+    logs_data: list,
+    api_keys: list[str] = None,
+    current_key_index: int = 0,
+) -> Tuple[str, int]:
+    """Analyze incident logs using Gemini."""
     
-def _extract_text(resp_obj: Any) -> str:
-    for attr in ("text", "content"):
-        v = getattr(resp_obj, attr, None)
-        if v:
-            return v
-    cand = getattr(resp_obj, "candidates", None)
-    if cand:
-        try:
-            return getattr(cand[0], "output", None) or getattr(cand[0], "text", None) or str(cand[0])
-        except Exception:
-            pass
-    out = getattr(resp_obj, "output", None)
-    if out:
-        try:
-            if isinstance(out, (list, tuple)):
-                return out[0].get("content") if isinstance(out[0], dict) else str(out[0])
-            if isinstance(out, dict):
-                return out.get("content") or str(out)
-        except Exception:
-            pass
-    if hasattr(resp_obj, "to_dict"):
-        try:
-            return json.dumps(resp_obj.to_dict())
-        except Exception:
-            pass
-    return str(resp_obj)
+    prompt = f"""Analyze this incident based on logs and traces:
+    
+Incident ID: {incident_context.get('incident_id')}
+Monitor: {incident_context.get('monitor', {}).get('title')}
 
-def gemini_json_call(*, client: genai.Client, model: str, system_instructions: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Sends (instructions + payload JSON) and parses STRICT JSON response.
-    """
-    prompt_text = system_instructions + "\n\n" + json.dumps(payload)
+Logs:
+{logs_data}
 
-    # Best-compat path with google-genai 1.x (what you're pinned to)
-    resp = client.models.generate_content(model=model, contents=[prompt_text])
-    text = _extract_text(resp)
-
-    stripped = text.strip()
-    if stripped.startswith("```"):
-        parts = stripped.split("\n")
-        if parts and parts[0].startswith("```"):
-            parts = parts[1:]
-        if parts and parts[-1].strip().startswith("```"):
-            parts = parts[:-1]
-        stripped = "\n".join(parts).strip()
-
+Provide a detailed analysis of the root cause.
+"""
+    
     try:
-        return json.loads(stripped)
-    except Exception:
-        return {
-            "summary": "Gemini did not return valid JSON.",
-            "raw": text,
-            "reasoning": "N/A",
-        }
+        response = client.models.generate_content(
+            model=model,
+            contents=prompt
+        )
+        return response.text, current_key_index
+    except Exception as e:
+        print(f"[gemini_client] Error with key index {current_key_index}: {e}")
+        
+        # Try next API key if available
+        if api_keys and current_key_index < len(api_keys) - 1:
+            next_index = current_key_index + 1
+            print(f"[gemini_client] Retrying with key index {next_index}")
+            new_client = genai.Client(api_key=api_keys[next_index])
+            return analyze_incident_with_gemini(
+                client=new_client,
+                model=model,
+                incident_context=incident_context,
+                logs_data=logs_data,
+                api_keys=api_keys,
+                current_key_index=next_index,
+            )
+        raise
+
+def gemini_json_call(
+    client: genai.Client,
+    model: str,
+    prompt: str,
+) -> Dict[str, Any]:
+    """Make a JSON-formatted call to Gemini."""
+    response = client.models.generate_content(
+        model=model,
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            response_mime_type="application/json"
+        )
+    )
+    
+    import json
+    return json.loads(response.text)

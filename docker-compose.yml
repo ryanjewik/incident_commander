@@ -95,6 +95,8 @@ services:
       - CLIENT_PROPERTIES_PATH=/app/common/client.properties
       - FIREBASE_CREDENTIALS_PATH=/app/backend/firebase-service-account.json
       - GOOGLE_APPLICATION_CREDENTIALS=/app/backend/firebase-service-account.json
+      - STARTUP_DELAY_SECONDS=10
+      - FIREBASE_WEB_API_KEY=${FIREBASE_WEB_API_KEY}
     # restart: unless-stopped  
     networks:
       - dd_net

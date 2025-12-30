@@ -1,6 +1,7 @@
 from __future__ import annotations
 import json
 import os
+import time
 from datetime import datetime, timezone
 from typing import Any, Dict
 
@@ -84,8 +85,13 @@ def main() -> None:
     started_topic = "agent_started"
     result_topic = "agent_result"
 
+    # Wait for Kafka to be ready
+    startup_delay = int(os.getenv("STARTUP_DELAY_SECONDS", "5"))
+    print(f"[{AGENT_NAME}] waiting {startup_delay}s for Kafka to be ready...")
+    time.sleep(startup_delay)
+
     cfg = build_kafka_config(client_props_path, os.environ)
-    consumer = make_consumer(cfg, group_id="metrics-agent-v1")
+    consumer = make_consumer(cfg, group_id="metrics-agent-v3", auto_offset_reset="latest")
     producer = make_producer(cfg)
 
     try:
@@ -94,6 +100,34 @@ def main() -> None:
         print(f"[{AGENT_NAME}] ensure_topics failed: {e}")
 
     consumer.subscribe([incidents_topic])
+    
+    # Diagnostic: Check topic metadata
+    print(f"[{AGENT_NAME}] checking topic metadata for {incidents_topic}...")
+    try:
+        metadata = consumer.list_topics(topic=incidents_topic, timeout=10)
+        if incidents_topic in metadata.topics:
+            topic_metadata = metadata.topics[incidents_topic]
+            print(f"[{AGENT_NAME}] topic has {len(topic_metadata.partitions)} partitions")
+            for partition_id, partition_metadata in topic_metadata.partitions.items():
+                print(f"[{AGENT_NAME}]   partition {partition_id}: leader={partition_metadata.leader}")
+        else:
+            print(f"[{AGENT_NAME}] WARNING: topic {incidents_topic} not found in metadata")
+    except Exception as e:
+        print(f"[{AGENT_NAME}] failed to retrieve topic metadata: {e}")
+
+    # Wait for assignment
+    print(f"[{AGENT_NAME}] waiting for partition assignment...")
+    max_wait = 30
+    wait_count = 0
+    while wait_count < max_wait:
+        assignment = consumer.assignment()
+        if assignment:
+            print(f"[{AGENT_NAME}] assigned to partitions: {[p.partition for p in assignment]}")
+            break
+        time.sleep(1)
+        wait_count += 1
+    else:
+        print(f"[{AGENT_NAME}] WARNING: no partition assignment after {max_wait}s")
 
     try:
         gemini = build_gemini_client(gemini_keys[0])
@@ -106,21 +140,34 @@ def main() -> None:
     # Secrets client to fetch per-organization decrypted keys from backend
     secrets_client = SecretsClient()
 
-    print(f"[{AGENT_NAME}] consuming topic={incidents_topic}")
+    print(f"[{AGENT_NAME}] consuming topic={incidents_topic} (listening for NEW incidents only)")
+    poll_count = 0
+    message_count = 0
     try:
         while True:
             msg = consumer.poll(1.0)
+            poll_count += 1
+            
+            # Periodic status logging
+            if poll_count % 30 == 0:
+                print(f"[{AGENT_NAME}] polling status: poll_count={poll_count}, messages_received={message_count}")
+            
             if msg is None:
                 continue
             if msg.error():
                 print(f"[{AGENT_NAME}] consumer error: {msg.error()}")
                 continue
 
+            message_count += 1
+            print(f"[{AGENT_NAME}] ✓ received message #{message_count} from partition={msg.partition()}, offset={msg.offset()}")
+            
             raw = json.loads(msg.value().decode("utf-8"))
 
             incident_id = raw.get("incident_id", "")
             org_id = raw.get("organization_id", "")
             ts = raw.get("timestamp", utc_now_iso())
+            
+            print(f"[{AGENT_NAME}] processing incident_id={incident_id}, org_id={org_id}")
 
             publish_json(
                 producer,
