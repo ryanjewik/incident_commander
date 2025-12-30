@@ -97,7 +97,6 @@ services:
       - GOOGLE_APPLICATION_CREDENTIALS=/app/backend/firebase-service-account.json
       - STARTUP_DELAY_SECONDS=10
       - FIREBASE_WEB_API_KEY=${FIREBASE_WEB_API_KEY}
-    # restart: unless-stopped  
     networks:
       - dd_net
     stdin_open: true

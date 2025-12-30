@@ -4,6 +4,8 @@ import os
 import time
 from datetime import datetime, timezone
 from typing import Any, Dict
+from concurrent.futures import ThreadPoolExecutor, Future
+import threading
 
 from agents.common.kafka_client import build_kafka_config, make_consumer, make_producer, ensure_topics
 from agents.common.datadog_client import query_timeseries, get_monitor_details, download_snapshot_image
@@ -53,29 +55,226 @@ def build_metric_queries(raw: Dict[str, Any], monitor_query: str) -> list[str]:
     return queries
 
 
+def process_incident(
+    raw: Dict[str, Any],
+    producer,
+    gemini,
+    dd_site: str,
+    gemini_model: str,
+    started_topic: str,
+    result_topic: str,
+    gemini_keys: list[str],
+    current_key_index: int,
+    dd_sem=None,
+    gemini_sem=None,
+    secrets_client: SecretsClient | None = None,
+) -> None:
+    try:
+        incident_id = raw.get("incident_id", "")
+        org_id = raw.get("organization_id", "")
+        
+        publish_json(
+            producer,
+            started_topic,
+            {
+                "agent": AGENT_NAME,
+                "incident_id": incident_id,
+                "organization_id": org_id,
+                "timestamp": utc_now_iso(),
+                "status": "started",
+            },
+        )
+
+        last_updated_ms = int(raw.get("raw_payload_ref", {}).get("event", {}).get("last_updated_ms", "0") or "0")
+        from_ms = max(0, last_updated_ms - 30 * 60 * 1000)
+        to_ms = last_updated_ms + 5 * 60 * 1000
+
+        monitor_id_str = raw.get("monitor_id", "")
+        monitor_id = None
+        if isinstance(monitor_id_str, str) and monitor_id_str.isdigit():
+            monitor_id = int(monitor_id_str)
+
+        # Resolve per-organization Datadog keys (backend-decrypted).
+        # Do NOT fall back to environment variables for Datadog API/app keys.
+        dd_api_key_used = None
+        dd_app_key_used = None
+        try:
+            if secrets_client and org_id:
+                sk = secrets_client.get_datadog_keys(org_id)
+                if sk:
+                    dd_api_key_used = sk.get("datadog_api_key")
+                    dd_app_key_used = sk.get("datadog_app_key")
+        except Exception as e:
+            print(f"[{AGENT_NAME}] secrets fetch error for org={org_id}: {e}")
+
+        # If we couldn't obtain decrypted keys for this organization, fail fast.
+        if not dd_api_key_used or not dd_app_key_used:
+            err_msg = f"missing datadog keys for org={org_id}; refusing to use .env values"
+            print(f"[{AGENT_NAME}] {err_msg}")
+            publish_json(
+                producer,
+                result_topic,
+                {
+                    "agent": AGENT_NAME,
+                    "incident_id": incident_id,
+                    "organization_id": org_id,
+                    "timestamp": utc_now_iso(),
+                    "status": "failed",
+                    "error": err_msg,
+                },
+            )
+            return
+
+        monitor_details = {}
+        monitor_query = ""
+        if monitor_id:
+            if dd_sem:
+                with dd_sem:
+                    monitor_details = get_monitor_details(
+                        dd_site=dd_site,
+                        dd_api_key=dd_api_key_used,
+                        dd_app_key=dd_app_key_used,
+                        monitor_id=monitor_id,
+                    )
+            else:
+                monitor_details = get_monitor_details(
+                    dd_site=dd_site,
+                    dd_api_key=dd_api_key_used,
+                    dd_app_key=dd_app_key_used,
+                    monitor_id=monitor_id,
+                )
+            monitor_query = monitor_details.get("query", "")
+
+        metric_queries = build_metric_queries(raw, monitor_query)
+
+        timeseries_data = []
+        for query in metric_queries:
+            if not query:
+                continue
+            if dd_sem:
+                with dd_sem:
+                    ts_result = query_timeseries(
+                        dd_site=dd_site,
+                        dd_api_key=dd_api_key_used,
+                        dd_app_key=dd_app_key_used,
+                        query=query,
+                        from_ms=from_ms,
+                        to_ms=to_ms,
+                    )
+            else:
+                ts_result = query_timeseries(
+                    dd_site=dd_site,
+                    dd_api_key=dd_api_key_used,
+                    dd_app_key=dd_app_key_used,
+                    query=query,
+                    from_ms=from_ms,
+                    to_ms=to_ms,
+                )
+            if ts_result:
+                timeseries_data.append({"query": query, "result": ts_result})
+
+        snapshot_url = raw.get("raw_payload_ref", {}).get("event", {}).get("snapshot_url", "") or ""
+        snapshot_bytes = None
+        if snapshot_url:
+            try:
+                snapshot_bytes = download_snapshot_image(snapshot_url)
+            except Exception as e:
+                print(f"[{AGENT_NAME}] snapshot download failed: {e}")
+
+        event = raw.get("raw_payload_ref", {}).get("event", {}) or {}
+
+        incident_context: Dict[str, Any] = {
+            "incident_id": incident_id,
+            "organization_id": org_id,
+            "datadog_site": dd_site,
+            "time_window_ms": {"from": from_ms, "to": to_ms},
+            "monitor": {
+                "id": monitor_id,
+                "query": monitor_query,
+                "title": monitor_details.get("name") or event.get("title"),
+                "tags": event.get("tags"),
+                "type": monitor_details.get("type"),
+                "thresholds": monitor_details.get("thresholds"),
+                "event_url": event.get("link"),
+            },
+            "snapshot_url": snapshot_url,
+            "timeseries": timeseries_data,
+        }
+
+        if gemini_sem:
+            with gemini_sem:
+                gemini_result, new_key_index = analyze_metrics_with_gemini(
+                    client=gemini,
+                    model=gemini_model,
+                    incident_context=incident_context,
+                    snapshot_png_bytes=snapshot_bytes,
+                    api_keys=gemini_keys,
+                    current_key_index=current_key_index,
+                )
+        else:
+            gemini_result, new_key_index = analyze_metrics_with_gemini(
+                client=gemini,
+                model=gemini_model,
+                incident_context=incident_context,
+                snapshot_png_bytes=snapshot_bytes,
+                api_keys=gemini_keys,
+                current_key_index=current_key_index,
+            )
+
+        final_payload = {
+            "agent": AGENT_NAME,
+            "incident_id": incident_id,
+            "organization_id": org_id,
+            "timestamp": utc_now_iso(),
+            "status": "completed",
+            "result": gemini_result,
+            "debug": {
+                "monitor_query": monitor_query,
+                "metric_queries": metric_queries,
+                "from_ms": from_ms,
+                "to_ms": to_ms,
+                "snapshot_included": bool(snapshot_bytes),
+                "timeseries_count": len(timeseries_data),
+            },
+        }
+
+        artifact_paths = write_agent_artifacts(
+            incident_id=incident_id,
+            agent_name=AGENT_NAME,
+            payload=final_payload,
+        )
+        final_payload["artifacts"] = artifact_paths
+
+        publish_json(producer, result_topic, final_payload)
+        print(f"[{AGENT_NAME}] completed incident_id={incident_id}")
+
+    except Exception as e:
+        print(f"[{AGENT_NAME}] error processing incident: {e}")
+
+
 def main() -> None:
     print(f"[{AGENT_NAME}] starting up...")
     
-    # Validate required environment variables
-    required_vars = ["DD_API_KEY", "DD_APP_KEY", "DD_SITE"]
-    missing_vars = [var for var in required_vars if not os.getenv(var)]
-    if missing_vars:
-        raise RuntimeError(f"Missing required environment variables: {', '.join(missing_vars)}")
-    
-    dd_api_key = os.environ["DD_API_KEY"]
-    dd_app_key = os.environ["DD_APP_KEY"]
-    dd_site = os.environ["DD_SITE"]
+    # Load Datadog site (still needed for API base URL construction)
+    dd_site = os.environ.get("DD_SITE", "datadoghq.com")
 
+    # Load multiple Gemini API keys for rotation
     gemini_keys = []
     for i in range(1, 10):
         key = os.getenv(f"GEMINI_API_KEY_{i}")
         if key:
             gemini_keys.append(key)
     
+    # Fall back to single key if multi-key not configured
     if not gemini_keys:
-        raise RuntimeError("No GEMINI_API_KEY_* environment variables found")
+        single_key = os.getenv("GEMINI_API_KEY")
+        if single_key:
+            gemini_keys.append(single_key)
     
-    print(f"[{AGENT_NAME}] loaded {len(gemini_keys)} Gemini API keys")
+    if not gemini_keys:
+        raise RuntimeError("No GEMINI_API_KEY or GEMINI_API_KEY_* environment variables found")
+    
+    print(f"[{AGENT_NAME}] loaded {len(gemini_keys)} Gemini API key(s)")
     
     gemini_model = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
 
@@ -85,13 +284,8 @@ def main() -> None:
     started_topic = "agent_started"
     result_topic = "agent_result"
 
-    # Wait for Kafka to be ready
-    startup_delay = int(os.getenv("STARTUP_DELAY_SECONDS", "5"))
-    print(f"[{AGENT_NAME}] waiting {startup_delay}s for Kafka to be ready...")
-    time.sleep(startup_delay)
-
     cfg = build_kafka_config(client_props_path, os.environ)
-    consumer = make_consumer(cfg, group_id="metrics-agent-v3", auto_offset_reset="latest")
+    consumer = make_consumer(cfg, group_id="metrics-agent-v3", auto_offset_reset="earliest")
     producer = make_producer(cfg)
 
     try:
@@ -100,38 +294,9 @@ def main() -> None:
         print(f"[{AGENT_NAME}] ensure_topics failed: {e}")
 
     consumer.subscribe([incidents_topic])
-    
-    # Diagnostic: Check topic metadata
-    print(f"[{AGENT_NAME}] checking topic metadata for {incidents_topic}...")
-    try:
-        metadata = consumer.list_topics(topic=incidents_topic, timeout=10)
-        if incidents_topic in metadata.topics:
-            topic_metadata = metadata.topics[incidents_topic]
-            print(f"[{AGENT_NAME}] topic has {len(topic_metadata.partitions)} partitions")
-            for partition_id, partition_metadata in topic_metadata.partitions.items():
-                print(f"[{AGENT_NAME}]   partition {partition_id}: leader={partition_metadata.leader}")
-        else:
-            print(f"[{AGENT_NAME}] WARNING: topic {incidents_topic} not found in metadata")
-    except Exception as e:
-        print(f"[{AGENT_NAME}] failed to retrieve topic metadata: {e}")
-
-    # Wait for assignment
-    print(f"[{AGENT_NAME}] waiting for partition assignment...")
-    max_wait = 30
-    wait_count = 0
-    while wait_count < max_wait:
-        assignment = consumer.assignment()
-        if assignment:
-            print(f"[{AGENT_NAME}] assigned to partitions: {[p.partition for p in assignment]}")
-            break
-        time.sleep(1)
-        wait_count += 1
-    else:
-        print(f"[{AGENT_NAME}] WARNING: no partition assignment after {max_wait}s")
 
     try:
         gemini = build_gemini_client(gemini_keys[0])
-        print(f"[{AGENT_NAME}] Gemini client initialized successfully")
     except Exception as e:
         raise RuntimeError(f"Failed to initialize Gemini client: {e}")
     
@@ -140,180 +305,56 @@ def main() -> None:
     # Secrets client to fetch per-organization decrypted keys from backend
     secrets_client = SecretsClient()
 
-    print(f"[{AGENT_NAME}] consuming topic={incidents_topic} (listening for NEW incidents only)")
-    poll_count = 0
-    message_count = 0
+    # Concurrency controls
+    dd_max = int(os.getenv("DD_MAX_CONCURRENT", "1"))
+    gemini_max = int(os.getenv("GEMINI_MAX_CONCURRENT", "2"))
+    dd_sem = threading.BoundedSemaphore(dd_max)
+    gemini_sem = threading.BoundedSemaphore(gemini_max)
+
+    print(f"[{AGENT_NAME}] consuming topic={incidents_topic}")
+    max_workers = int(os.getenv("AGENT_MAX_WORKERS", "4"))
+    executor = ThreadPoolExecutor(max_workers=max_workers)
+    pending: list[Future] = []
+
     try:
         while True:
             msg = consumer.poll(1.0)
-            poll_count += 1
-            
-            # Periodic status logging
-            if poll_count % 30 == 0:
-                print(f"[{AGENT_NAME}] polling status: poll_count={poll_count}, messages_received={message_count}")
-            
             if msg is None:
+                pending = [f for f in pending if not f.done()]
                 continue
             if msg.error():
                 print(f"[{AGENT_NAME}] consumer error: {msg.error()}")
                 continue
 
-            message_count += 1
-            print(f"[{AGENT_NAME}] ✓ received message #{message_count} from partition={msg.partition()}, offset={msg.offset()}")
-            
             raw = json.loads(msg.value().decode("utf-8"))
 
-            incident_id = raw.get("incident_id", "")
-            org_id = raw.get("organization_id", "")
-            ts = raw.get("timestamp", utc_now_iso())
-            
-            print(f"[{AGENT_NAME}] processing incident_id={incident_id}, org_id={org_id}")
+            # Throttle submission if too many pending tasks
+            pending = [f for f in pending if not f.done()]
+            while sum(1 for f in pending if not f.done()) >= max_workers * 2:
+                time.sleep(0.1)
+                pending = [f for f in pending if not f.done()]
 
-            publish_json(
+            future = executor.submit(
+                process_incident,
+                raw,
                 producer,
+                gemini,
+                dd_site,
+                gemini_model,
                 started_topic,
-                {
-                    "agent": AGENT_NAME,
-                    "incident_id": incident_id,
-                    "organization_id": org_id,
-                    "timestamp": utc_now_iso(),
-                    "status": "started",
-                },
+                result_topic,
+                gemini_keys,
+                current_key_index,
+                dd_sem,
+                gemini_sem,
+                secrets_client,
             )
+            pending.append(future)
 
-            last_updated_ms = int(raw.get("raw_payload_ref", {}).get("event", {}).get("last_updated_ms", "0") or "0")
-            from_ms = max(0, last_updated_ms - 30 * 60 * 1000)
-            to_ms = last_updated_ms + 5 * 60 * 1000
-
-            monitor_id_str = raw.get("monitor_id", "")
-            monitor_id = None
-            if isinstance(monitor_id_str, str) and monitor_id_str.isdigit():
-                monitor_id = int(monitor_id_str)
-
-            # Resolve per-organization Datadog keys (backend-decrypted).
-            # Do NOT fall back to environment variables for Datadog API/app keys.
-            dd_api_key_used = None
-            dd_app_key_used = None
-            try:
-                if secrets_client and org_id:
-                    sk = secrets_client.get_datadog_keys(org_id)
-                    if sk:
-                        dd_api_key_used = sk.get("datadog_api_key")
-                        dd_app_key_used = sk.get("datadog_app_key")
-            except Exception as e:
-                print(f"[{AGENT_NAME}] secrets fetch error for org={org_id}: {e}")
-
-            # If we couldn't obtain decrypted keys for this organization, fail fast.
-            if not dd_api_key_used or not dd_app_key_used:
-                err_msg = f"missing datadog keys for org={org_id}; refusing to use .env values"
-                print(f"[{AGENT_NAME}] {err_msg}")
-                publish_json(
-                    producer,
-                    result_topic,
-                    {
-                        "agent": AGENT_NAME,
-                        "incident_id": incident_id,
-                        "organization_id": org_id,
-                        "timestamp": utc_now_iso(),
-                        "status": "failed",
-                        "error": err_msg,
-                    },
-                )
-                continue
-
-            monitor_details = {}
-            monitor_query = ""
-            if monitor_id:
-                monitor_details = get_monitor_details(
-                    dd_site=dd_site,
-                    dd_api_key=dd_api_key_used,
-                    dd_app_key=dd_app_key_used,
-                    monitor_id=monitor_id,
-                )
-                monitor_query = monitor_details.get("query", "")
-
-            metric_queries = build_metric_queries(raw, monitor_query)
-
-            timeseries_data = []
-            for query in metric_queries:
-                if not query:
-                    continue
-                ts_result = query_timeseries(
-                    dd_site=dd_site,
-                    dd_api_key=dd_api_key_used,
-                    dd_app_key=dd_app_key_used,
-                    query=query,
-                    from_ms=from_ms,
-                    to_ms=to_ms,
-                )
-                if ts_result:
-                    timeseries_data.append({"query": query, "result": ts_result})
-
-            snapshot_url = raw.get("raw_payload_ref", {}).get("event", {}).get("snapshot_url", "") or ""
-            snapshot_bytes = None
-            if snapshot_url:
-                try:
-                    snapshot_bytes = download_snapshot_image(snapshot_url)
-                except Exception as e:
-                    print(f"[{AGENT_NAME}] snapshot download failed: {e}")
-
-            event = raw.get("raw_payload_ref", {}).get("event", {}) or {}
-
-            incident_context: Dict[str, Any] = {
-                "incident_id": incident_id,
-                "organization_id": org_id,
-                "datadog_site": dd_site,
-                "time_window_ms": {"from": from_ms, "to": to_ms},
-                "monitor": {
-                    "id": monitor_id,
-                    "query": monitor_query,
-                    "title": monitor_details.get("name") or event.get("title"),
-                    "tags": event.get("tags"),
-                    "type": monitor_details.get("type"),
-                    "thresholds": monitor_details.get("thresholds"),
-                    "event_url": event.get("link"),
-                },
-                "snapshot_url": snapshot_url,
-                "timeseries": timeseries_data,
-            }
-
-            gemini_result, current_key_index = analyze_metrics_with_gemini(
-                client=gemini,
-                model=gemini_model,
-                incident_context=incident_context,
-                snapshot_png_bytes=snapshot_bytes,
-                api_keys=gemini_keys,
-                current_key_index=current_key_index,
-            )
-
-            final_payload = {
-                "agent": AGENT_NAME,
-                "incident_id": incident_id,
-                "organization_id": org_id,
-                "timestamp": utc_now_iso(),
-                "status": "completed",
-                "result": gemini_result,
-                "debug": {
-                    "monitor_query": monitor_query,
-                    "metric_queries": metric_queries,
-                    "from_ms": from_ms,
-                    "to_ms": to_ms,
-                    "snapshot_included": bool(snapshot_bytes),
-                    "timeseries_count": len(timeseries_data),
-                },
-            }
-
-            artifact_paths = write_agent_artifacts(
-                incident_id=incident_id,
-                agent_name=AGENT_NAME,
-                payload=final_payload,
-            )
-            final_payload["artifacts"] = artifact_paths
-
-            publish_json(producer, result_topic, final_payload)
-            print(f"[{AGENT_NAME}] completed incident_id={incident_id}")
-
+    except KeyboardInterrupt:
+        print(f"[{AGENT_NAME}] shutting down due to KeyboardInterrupt")
     finally:
+        executor.shutdown(wait=True)
         consumer.close()
 
 
