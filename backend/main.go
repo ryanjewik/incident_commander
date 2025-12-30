@@ -35,12 +35,13 @@ func main() {
 
 	userService := services.NewUserService(firebaseService)
 	incidentService := services.NewIncidentService(firebaseService)
+	incidentHandler := handlers.NewIncidentHandler(incidentService)
 
 	app := handlers.NewApp(cfg, nil, userService, firebaseService)
 
-	r := gin.Default()
+	r := gin.New()
 
-	router.Register(r, app, userService, incidentService, firebaseService)
+	router.Register(r, app, userService, incidentHandler, firebaseService, incidentService)
 
 	log.Printf("Starting server on port %s", cfg.Port)
 	r.Run(":" + cfg.Port)

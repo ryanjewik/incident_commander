@@ -17,6 +17,7 @@ type Incident struct {
 	UpdatedAt      time.Time              `firestore:"updated_at" json:"updated_at"`
 	SeverityGuess  string                 `firestore:"severity_guess,omitempty" json:"severity_guess,omitempty"`
 	Metadata       map[string]interface{} `firestore:"metadata,omitempty" json:"metadata,omitempty"`
+	Event          map[string]interface{} `firestore:"event,omitempty" json:"event"`
 }
 
 // CreateIncidentRequest is the request body for creating an incident

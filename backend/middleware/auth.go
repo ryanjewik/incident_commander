@@ -114,14 +114,14 @@ func AuthMiddleware(userService *services.UserService) gin.HandlerFunc {
 			}
 		}
 
-		// Set organization ID in context if user belongs to an organization
+		// Set organization ID in context ONLY if user belongs to a valid organization
 		if user.OrganizationID != "" && user.OrganizationID != "default" {
 			log.Printf("[Auth] Setting organizationID in context: '%s'", user.OrganizationID)
 			c.Set("organizationID", user.OrganizationID)
 			log.Printf("[Auth] c.Set('organizationID', '%s') completed", user.OrganizationID)
 			log.Printf("[Auth] Context values set - userID: %s, organizationID: %s", decodedToken.UID, user.OrganizationID)
 		} else {
-			log.Printf("[Auth] NOT setting organizationID (value: '%s')", user.OrganizationID)
+			log.Printf("[Auth] NOT setting organizationID in context (value: '%s' is empty or default)", user.OrganizationID)
 			log.Printf("[Auth] Context values set - userID: %s (no organization)", decodedToken.UID)
 		}
 

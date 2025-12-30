@@ -6,11 +6,16 @@ import IncidentTimeline from './dashboard_dummies/IncidentTimeline';
 import StatusDistribution from './dashboard_dummies/StatusDistribution';
 import SystemHealth from './dashboard_dummies/SystemHealth';
 import RecentLogs from './dashboard_dummies/RecentLogs';
+import ModeratorDecisionCard from './ModeratorDecisionCard';
+import ModeratorDecisionModal from './ModeratorDecisionModal';
 import type { Message } from '../services/api';
 
 interface ChatPanelProps {
   incidentId?: string;
   title?: string;
+  incidentType?: string;
+  moderatorResult?: any;
+  moderatorTimestamp?: string;
 }
 
 // Pastel color palette for different users
@@ -33,7 +38,7 @@ const getUserColor = (userName: string): string => {
   return pastelColors[hash % pastelColors.length];
 };
 
-function ChatPanel({ incidentId, title }: ChatPanelProps) {
+function ChatPanel({ incidentId, title, incidentType, moderatorResult, moderatorTimestamp }: ChatPanelProps) {
   const { userData } = useAuth();
   const [ddConfigured, setDdConfigured] = useState<boolean | null>(null);
   const [queryText, setQueryText] = useState('');
@@ -43,6 +48,7 @@ function ChatPanel({ incidentId, title }: ChatPanelProps) {
   const [isConnected, setIsConnected] = useState(false);
   const [isLoadingMessages, setIsLoadingMessages] = useState(true);
   const [currentUserName] = useState('You');
+  const [showModeratorModal, setShowModeratorModal] = useState(false);
   const recognitionRef = useRef<any>(null);
   const mountedRef = useRef(true);
   const currentIncidentRef = useRef<string | undefined>(incidentId);
@@ -337,6 +343,23 @@ function ChatPanel({ incidentId, title }: ChatPanelProps) {
 
             {/* Messages list (for incident chats or general NL query responses) */}
             <div className='space-y-2 mt-4'>
+              {/* Show moderator card first if it's an incident report */}
+              {incidentId && moderatorResult && (
+                <div className='mb-4'>
+                  <div className='flex items-center gap-2 mb-2'>
+                    <span className='font-semibold text-gray-800 text-xs'>Moderator Bot</span>
+                    <span className='text-[10px] text-gray-600'>
+                      {moderatorTimestamp ? new Date(moderatorTimestamp).toLocaleString() : 'N/A'}
+                    </span>
+                  </div>
+                  <ModeratorDecisionCard 
+                    moderatorResult={moderatorResult}
+                    moderatorTimestamp={moderatorTimestamp}
+                    onClick={() => setShowModeratorModal(true)}
+                  />
+                </div>
+              )}
+
               {messages.map((msg) => {
                 const isCurrentUser = msg.user_name === currentUserName;
                 const bgColor = isCurrentUser ? 'bg-purple-300' : getUserColor(msg.user_name);
@@ -404,6 +427,14 @@ function ChatPanel({ incidentId, title }: ChatPanelProps) {
           </button>
         </div>
       </div>
+
+      {showModeratorModal && moderatorResult && (
+        <ModeratorDecisionModal
+          moderatorResult={moderatorResult}
+          moderatorTimestamp={moderatorTimestamp}
+          onClose={() => setShowModeratorModal(false)}
+        />
+      )}
     </div>
   );
 }

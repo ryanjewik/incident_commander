@@ -9,7 +9,7 @@ import (
 	"github.com/ryanjewik/incident_commander/backend/services"
 )
 
-func Register(r *gin.Engine, app *handlers.App, userService *services.UserService, incidentService *services.IncidentService, firebaseService *services.FirebaseService) {
+func Register(r *gin.Engine, app *handlers.App, userService *services.UserService, incidentHandler *handlers.IncidentHandler, firebaseService *services.FirebaseService, incidentService *services.IncidentService) {
 	// Configure CORS
 	r.Use(cors.New(cors.Config{
 		AllowOrigins:     []string{"http://localhost:5173", "http://localhost:3000"},
@@ -28,9 +28,6 @@ func Register(r *gin.Engine, app *handlers.App, userService *services.UserServic
 
 	// Initialize auth handler
 	authHandler := handlers.NewAuthHandler(userService)
-
-	// Initialize incident handler
-	incidentHandler := handlers.NewIncidentHandler(incidentService)
 
 	// Initialize chat handler
 	chatHandler := handlers.NewChatHandler(userService, firebaseService)
