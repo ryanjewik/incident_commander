@@ -3,6 +3,7 @@ package router
 import (
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
+	"github.com/ryanjewik/incident_commander/backend/config"
 	"github.com/ryanjewik/incident_commander/backend/handlers"
 	"github.com/ryanjewik/incident_commander/backend/middleware"
 	"github.com/ryanjewik/incident_commander/backend/services"
@@ -25,9 +26,6 @@ func Register(r *gin.Engine, app *handlers.App, userService *services.UserServic
 		})
 	})
 
-	// Health check
-	r.GET("/health", app.Health)
-
 	// Initialize auth handler
 	authHandler := handlers.NewAuthHandler(userService)
 
@@ -36,8 +34,19 @@ func Register(r *gin.Engine, app *handlers.App, userService *services.UserServic
 
 	// Initialize chat handler
 	chatHandler := handlers.NewChatHandler(userService, firebaseService)
+	// Initialize datadog poller & handler
+	ddService := services.NewDatadogService(config.Load(), firebaseService)
+	ddHandler := handlers.NewDatadogHandler(ddService)
 	// Initialize datadog webhook handler (public endpoint)
-	ddWebhookHandler := handlers.NewDatadogWebhookHandler(incidentService, firebaseService)
+	ddWebhookHandler := handlers.NewDatadogWebhookHandler(incidentService, firebaseService, ddService, chatHandler)
+
+	// wire broadcaster so DatadogService can push poll updates to websocket clients
+	ddService.SetBroadcaster(func(orgID string, payload interface{}) {
+		// payload is expected to be a map[string]interface{}
+		if chatHandler != nil {
+			chatHandler.BroadcastEvent(orgID, payload)
+		}
+	})
 	// OAuth token endpoint
 	oauthHandler := handlers.NewOAuthHandler(firebaseService)
 
@@ -89,6 +98,26 @@ func Register(r *gin.Engine, app *handlers.App, userService *services.UserServic
 		chat.POST("/messages", chatHandler.SendMessage)
 		chat.GET("/messages", chatHandler.GetMessages)
 	}
+
+	// Datadog data endpoints (protected)
+	dd := r.Group("/api/datadog")
+	dd.Use(middleware.AuthMiddleware(userService))
+	{
+		dd.GET("/:orgId/overview", ddHandler.GetOverview)
+		dd.GET("/:orgId/timeline", ddHandler.GetTimeline)
+		dd.GET("/:orgId/recent_logs", ddHandler.GetRecentLogs)
+		dd.GET("/:orgId/status_distribution", ddHandler.GetStatusDistribution)
+		dd.GET("/:orgId/monitors", ddHandler.GetMonitors)
+	}
+
+	// Public debug route for Datadog overview (bypasses auth) to help troubleshooting
+	r.GET("/api/datadog/:orgId/overview_public", ddHandler.GetOverview)
+	// Additional public debug routes for status distribution and recent logs
+	r.GET("/api/datadog/:orgId/status_distribution_public", ddHandler.GetStatusDistribution)
+	r.GET("/api/datadog/:orgId/recent_logs_public", ddHandler.GetRecentLogs)
+	// Alternate public debug routes (different path) in case clients prefer a namespaced public path
+	r.GET("/api/datadog/public/:orgId/status_distribution", ddHandler.GetStatusDistribution)
+	r.GET("/api/datadog/public/:orgId/recent_logs", ddHandler.GetRecentLogs)
 
 	// WebSocket endpoint (auth handled in handler via token query param)
 	r.GET("/api/chat/ws", chatHandler.HandleWebSocket)

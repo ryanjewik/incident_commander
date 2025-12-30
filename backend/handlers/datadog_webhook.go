@@ -25,10 +25,12 @@ import (
 type DatadogWebhookHandler struct {
 	incidentService *services.IncidentService
 	firebaseService *services.FirebaseService
+	ddService       *services.DatadogService
+	chatHandler     *ChatHandler
 }
 
-func NewDatadogWebhookHandler(incidentService *services.IncidentService, firebaseService *services.FirebaseService) *DatadogWebhookHandler {
-	return &DatadogWebhookHandler{incidentService: incidentService, firebaseService: firebaseService}
+func NewDatadogWebhookHandler(incidentService *services.IncidentService, firebaseService *services.FirebaseService, ddService *services.DatadogService, chatHandler *ChatHandler) *DatadogWebhookHandler {
+	return &DatadogWebhookHandler{incidentService: incidentService, firebaseService: firebaseService, ddService: ddService, chatHandler: chatHandler}
 }
 
 func ReadConfig() kafka.ConfigMap {
@@ -171,12 +173,8 @@ func consume(topic string, config kafka.ConfigMap) {
 // HandleDatadogWebhook accepts Datadog alert webhooks, validates a shared secret,
 // and creates an incident record in Firestore.
 func (h *DatadogWebhookHandler) HandleDatadogWebhook(c *gin.Context) {
-	// Validate secret header
-	secret := c.GetHeader("X-Webhook-Secret")
-	if secret == "" {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "missing webhook secret header"})
-		return
-	}
+	// Accept either a shared webhook secret header OR an Authorization bearer token.
+	secretHeader := c.GetHeader("X-Webhook-Secret")
 
 	// Optionally check X-Datadog-Source header
 	ddSource := c.GetHeader("X-Datadog-Source")
@@ -235,15 +233,48 @@ func (h *DatadogWebhookHandler) HandleDatadogWebhook(c *gin.Context) {
 		return
 	}
 
-	// Dev/test bypass: if X-Debug-Bypass: true and not running in production,
-	// skip the OAuth token validation so we can trigger test spikes locally.
-	skipAuth := false
-	if c.GetHeader("X-Debug-Bypass") == "true" && os.Getenv("ENV") != "production" {
-		skipAuth = true
-		log.Printf("[webhook] debug bypass enabled (skipping token validation) for org=%s", orgID)
+	// If a secret header was provided, validate against the organization's stored secret
+	webhookAuth := false
+	if secretHeader != "" {
+		if h.firebaseService != nil {
+			ctx2 := context.Background()
+			if doc, err := h.firebaseService.Firestore.Collection("organizations").Doc(orgID).Get(ctx2); err == nil && doc.Exists() {
+				d := doc.Data()
+				if dsRaw, ok := d["datadog_secrets"]; ok {
+					if dsMap, ok2 := dsRaw.(map[string]interface{}); ok2 {
+						if ws, ok3 := dsMap["webhook_secret"].(string); ok3 && ws != "" && ws == secretHeader {
+							webhookAuth = true
+						}
+						if ws2, ok4 := dsMap["webhookSecret"].(string); ok4 && ws2 != "" && ws2 == secretHeader {
+							webhookAuth = true
+						}
+					}
+				}
+			}
+		}
+		// fallback to global env secret
+		if !webhookAuth {
+			if envSecret := os.Getenv("DATADOG_WEBHOOK_SECRET"); envSecret != "" && envSecret == secretHeader {
+				webhookAuth = true
+			}
+		}
+		if !webhookAuth {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid webhook secret"})
+			return
+		}
 	}
 
-	// If not skipping auth (normal operation), validate Authorization: Bearer <token>
+	// If webhookAuth is true we skip token validation. Otherwise validate Authorization: Bearer <token>
+	skipAuth := webhookAuth
+	if !skipAuth {
+		// Dev/test bypass: if X-Debug-Bypass: true and not running in production,
+		// skip the OAuth token validation so we can trigger test spikes locally.
+		if c.GetHeader("X-Debug-Bypass") == "true" && os.Getenv("ENV") != "production" {
+			skipAuth = true
+			log.Printf("[webhook] debug bypass enabled (skipping token validation) for org=%s", orgID)
+		}
+	}
+
 	if !skipAuth {
 		authHeader := c.GetHeader("Authorization")
 		if authHeader == "" {
@@ -288,8 +319,6 @@ func (h *DatadogWebhookHandler) HandleDatadogWebhook(c *gin.Context) {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "token organization mismatch"})
 			return
 		}
-	} else {
-		log.Printf("[webhook] skipping token validation due to debug bypass for org=%s", orgID)
 	}
 
 	// Build Incident with requested mapping
@@ -359,6 +388,22 @@ func (h *DatadogWebhookHandler) HandleDatadogWebhook(c *gin.Context) {
 		return
 	}
 
+	// Build a lightweight log entry and push to DatadogService cache and websocket subscribers
+	logEntry := map[string]interface{}{
+		"time":        incident.CreatedAt.Format(time.RFC3339),
+		"level":       "INFO",
+		"message":     incident.Title,
+		"service":     "datadog_webhook",
+		"incident_id": incident.ID,
+	}
+	if h.ddService != nil {
+		h.ddService.AppendRecentLog(orgID, logEntry)
+	}
+	if h.chatHandler != nil {
+		// broadcast a simple wrapper so clients can differentiate event types
+		h.chatHandler.BroadcastEvent(orgID, map[string]interface{}{"type": "datadog_webhook", "payload": logEntry})
+	}
+
 	// publish to kafka/confluent: build minimal incident event (JSON)
 	go func(inc *models.Incident, raw map[string]interface{}) {
 		// extract a few helpful fields
@@ -424,6 +469,28 @@ func (h *DatadogWebhookHandler) HandleDatadogWebhook(c *gin.Context) {
 			return
 		}
 	}(payload)
+
+	// Append a lightweight recent log entry to the Datadog cache and broadcast over websocket
+	go func() {
+		defer func() { recover() }()
+		entry := map[string]interface{}{
+			"time":    incident.CreatedAt.Format(time.RFC3339),
+			"level":   "INFO",
+			"message": incident.Title,
+			"service": "datadog_webhook",
+		}
+		if h.ddService != nil {
+			h.ddService.AppendRecentLog(incident.OrganizationID, entry)
+		}
+		// Broadcast to websocket clients so UI updates in real time
+		if h.chatHandler != nil {
+			payload := map[string]interface{}{"type": "datadog_webhook", "payload": entry, "incident": incident}
+			go func() {
+				defer func() { recover() }()
+				h.chatHandler.BroadcastEvent(incident.OrganizationID, payload)
+			}()
+		}
+	}()
 
 	c.JSON(http.StatusCreated, incident)
 }

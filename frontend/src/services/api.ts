@@ -149,6 +149,7 @@ class WebSocketManager {
   private maxReconnectAttempts = 5;
   private reconnectDelay = 1000;
   private messageHandlers: Set<(message: Message) => void> = new Set();
+  private eventHandlers: Set<(payload: any) => void> = new Set();
   private connectionHandlers: Set<(connected: boolean) => void> = new Set();
   private shouldReconnect = true;
   private reconnectTimeout: number | null = null;
@@ -207,8 +208,19 @@ class WebSocketManager {
 
         this.ws.onmessage = (event) => {
           try {
-            const message = JSON.parse(event.data) as Message;
-            this.messageHandlers.forEach(handler => handler(message));
+            const payload = JSON.parse(event.data);
+            // If payload looks like a chat Message, notify message handlers
+            const isMessage = payload && (payload.id || payload.text || payload.user_id);
+            if (isMessage) {
+              try {
+                const message = payload as Message;
+                this.messageHandlers.forEach(handler => handler(message));
+              } catch (err) {
+                // fallthrough to event handlers
+              }
+            }
+            // Notify generic event handlers for all payloads
+            this.eventHandlers.forEach(handler => handler(payload));
           } catch (error) {
             console.error('[WebSocketManager] Failed to parse message:', error);
           }
@@ -325,6 +337,12 @@ class WebSocketManager {
   onMessage(handler: (message: Message) => void): () => void {
     this.messageHandlers.add(handler);
     return () => this.messageHandlers.delete(handler);
+  }
+
+  // Subscribe to generic websocket events (any payload)
+  onEvent(handler: (payload: any) => void): () => void {
+    this.eventHandlers.add(handler);
+    return () => this.eventHandlers.delete(handler);
   }
 
   onConnectionChange(handler: (connected: boolean) => void): () => void {
@@ -501,6 +519,27 @@ export const apiService = {
     return api.post<NLQueryResponse>('/NL_query', data).then((res: AxiosResponse<NLQueryResponse>) => {
       return res.data;
     });
+  },
+
+  // Datadog dashboard endpoints (org-scoped)
+  getDatadogOverview: (orgId: string) => {
+    return api.get<any>(`/api/datadog/${orgId}/overview`).then((res: AxiosResponse<any>) => res.data);
+  },
+
+  getDatadogTimeline: (orgId: string) => {
+    return api.get<any>(`/api/datadog/${orgId}/timeline`).then((res: AxiosResponse<any>) => res.data);
+  },
+
+  getDatadogRecentLogs: (orgId: string) => {
+    return api.get<any>(`/api/datadog/${orgId}/recent_logs`).then((res: AxiosResponse<any>) => res.data);
+  },
+
+  getDatadogStatusDistribution: (orgId: string) => {
+    return api.get<any>(`/api/datadog/${orgId}/status_distribution`).then((res: AxiosResponse<any>) => res.data);
+  },
+
+  getDatadogMonitors: (orgId: string) => {
+    return api.get<any>(`/api/datadog/${orgId}/monitors`).then((res: AxiosResponse<any>) => res.data);
   },
 
   // Add saveDatadogSecrets method (accepts secrets + optional settings payload)

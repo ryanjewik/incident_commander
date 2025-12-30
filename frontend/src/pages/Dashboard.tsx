@@ -3,7 +3,7 @@ import { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import MainContent from '../components/MainContent';
 import IncidentList from '../components/IncidentList';
-import MetricsCards from '../components/dashboard_dummies/MetricsCards';
+// top cards replaced by PerformanceMetrics
 import IncidentTimeline from '../components/dashboard_dummies/IncidentTimeline';
 import SystemHealth from '../components/dashboard_dummies/SystemHealth';
 import RecentLogs from '../components/dashboard_dummies/RecentLogs';
@@ -196,16 +196,16 @@ export default function Dashboard() {
             <div className="bg-gradient-to-br from-purple-50 to-pink-50 h-full w-full p-6 overflow-y-auto">
               <h2 className="text-3xl font-bold text-purple-700 mb-6">Dashboard Overview</h2>
               <div className="space-y-6">
-                <MetricsCards />
+                <PerformanceMetrics />
                 <div className="grid grid-cols-2 gap-6">
                   <IncidentTimeline />
                   <StatusDistribution />
                 </div>
                 <div className="grid grid-cols-2 gap-6">
                   <SystemHealth />
-                  <PerformanceMetrics />
+                  <RecentLogs />
                 </div>
-                <RecentLogs />
+                
               </div>
             </div>
           ) : (

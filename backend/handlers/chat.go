@@ -339,3 +339,19 @@ func (h *ChatHandler) broadcastMessage(organizationID string, message models.Mes
 		}
 	}
 }
+
+// BroadcastEvent sends an arbitrary payload to all websocket connections for an organization.
+func (h *ChatHandler) BroadcastEvent(organizationID string, payload interface{}) {
+	h.connMutex.RLock()
+	defer h.connMutex.RUnlock()
+
+	conns := h.connections[organizationID]
+	if conns == nil {
+		return
+	}
+	for conn := range conns {
+		if err := conn.WriteJSON(payload); err != nil {
+			log.Printf("[WebSocket] Error broadcasting event: %v", err)
+		}
+	}
+}
