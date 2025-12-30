@@ -15,6 +15,7 @@ type Incident struct {
 	CreatedBy      string                 `firestore:"created_by" json:"created_by"` // User ID
 	CreatedAt      time.Time              `firestore:"created_at" json:"created_at"`
 	UpdatedAt      time.Time              `firestore:"updated_at" json:"updated_at"`
+	SeverityGuess  string                 `firestore:"severity_guess,omitempty" json:"severity_guess,omitempty"`
 	Metadata       map[string]interface{} `firestore:"metadata,omitempty" json:"metadata,omitempty"`
 }
 
@@ -32,6 +33,7 @@ type CreateIncidentRequest struct {
 type UpdateIncidentRequest struct {
 	Title       string                 `json:"title,omitempty"`
 	Status      string                 `json:"status,omitempty"`
+	SeverityGuess string               `json:"severity_guess,omitempty"`
 	Description string                 `json:"description,omitempty"`
 	Metadata    map[string]interface{} `json:"metadata,omitempty"`
 }

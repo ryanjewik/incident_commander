@@ -171,6 +171,88 @@ def build_final_decision_with_gemini(
     )
 
 
+def _normalize_severity(raw: Optional[str]) -> Optional[str]:
+    if not raw:
+        return None
+    s = str(raw).strip().lower()
+    # accept some common forms
+    if s in ("critical", "crit", "sev0", "sev1"):
+        return "critical"
+    if s in ("high", "sev2", "sev3"):
+        return "high"
+    if s in ("medium", "med", "moderate", "sev4"):
+        return "medium"
+    if s in ("low", "minor", "sev5"):
+        return "low"
+    # map numeric confidence to buckets if provided as string numeric
+    try:
+        v = float(s)
+        if v >= 0.9:
+            return "critical"
+        if v >= 0.7:
+            return "high"
+        if v >= 0.4:
+            return "medium"
+        return "low"
+    except Exception:
+        pass
+    # fallback: if includes words
+    if "critical" in s:
+        return "critical"
+    if "high" in s:
+        return "high"
+    if "medium" in s or "moderate" in s:
+        return "medium"
+    if "low" in s:
+        return "low"
+    return None
+
+
+def _compute_severity_from_cards(agent_cards: List[Dict[str, Any]], final: Dict[str, Any]) -> str:
+    # Try to use any explicit severity from final
+    sev = _normalize_severity(final.get("severity_guess"))
+    if sev:
+        return sev
+
+    # Try to inspect agent cards for confidence signals
+    max_conf = 0.0
+    for c in agent_cards:
+        card = c.get("card") if isinstance(c, dict) else None
+        if isinstance(card, dict):
+            conf = card.get("confidence") or card.get("debug", {}).get("confidence")
+            try:
+                f = float(conf)
+                if f > max_conf:
+                    max_conf = f
+            except Exception:
+                pass
+
+    # Heuristic buckets
+    if max_conf >= 0.9:
+        return "critical"
+    if max_conf >= 0.7:
+        return "high"
+    if max_conf >= 0.4:
+        return "medium"
+
+    # If any agent reported 'error' or 'failed' signals in keys/risks, bump severity
+    for c in agent_cards:
+        card = c.get("card") if isinstance(c, dict) else None
+        if not isinstance(card, dict):
+            continue
+        for key in ("key_signals", "risks", "top_findings", "notes"):
+            v = card.get(key)
+            if not v:
+                continue
+            text = json.dumps(v).lower()
+            if "critical" in text or "data loss" in text or "service unavailable" in text:
+                return "critical"
+            if "error" in text or "failed" in text or "outage" in text:
+                return "high"
+
+    return "low"
+
+
 def collect_agent_results_for_incident(
     *,
     kafka_cfg: Dict[str, str],
@@ -359,6 +441,19 @@ def main() -> None:
                 incident_header=incident_header,
                 agent_cards=agent_cards,
             )
+
+            # Ensure final contains a normalized severity estimate (low/medium/high/critical)
+            try:
+                # If LLM provided an explicit severity, normalize it
+                sev = _normalize_severity(final.get("severity_guess")) if isinstance(final, dict) else None
+                if not sev:
+                    sev = _compute_severity_from_cards(agent_cards, final if isinstance(final, dict) else {})
+                if isinstance(final, dict):
+                    final["severity_guess"] = sev
+                else:
+                    final = {"incident_summary": str(final), "severity_guess": sev}
+            except Exception as e:
+                print(f"[{AGENT_NAME}] severity normalization failed: {e}")
 
             final_payload = {
                 "agent": AGENT_NAME,

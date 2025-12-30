@@ -393,6 +393,23 @@ func (h *DatadogWebhookHandler) HandleDatadogWebhook(c *gin.Context) {
 		return
 	}
 
+	// Determine initial severity guess (if present) and set on incident
+	severityGuess := ""
+	if mon, ok := payload["monitor"].(map[string]interface{}); ok {
+		if pr, ok := mon["alert_priority"].(string); ok {
+			severityGuess = pr
+		}
+	}
+	// fallback to priority
+	if severityGuess == "" {
+		if s, _ := payload["priority"].(string); s != "" {
+			severityGuess = s
+		}
+	}
+	if severityGuess != "" {
+		incident.SeverityGuess = severityGuess
+	}
+
 	// Build a lightweight log entry and push to DatadogService cache and websocket subscribers
 	logEntry := map[string]interface{}{
 		"time":        incident.CreatedAt.Format(time.RFC3339),

@@ -6,6 +6,7 @@ interface IncidentListProps {
   selectedIncident: string | null;
   onSelectIncident: (id: string) => void;
   onStatusChange: (incidentId: string, newStatus: string) => void;
+  onSeverityChange?: (incidentId: string, newSeverity: string) => void;
 }
 
 function IncidentList({ incidentData, selectedIncident, onSelectIncident, onStatusChange }: IncidentListProps) {
@@ -96,6 +97,14 @@ function IncidentList({ incidentData, selectedIncident, onSelectIncident, onStat
                   incident.type === 'Incident Report' ? 'bg-red-500 text-white' : 'bg-cyan-500 text-white'
                 }`}>
                   {incident.type}
+                </span>
+                <span className={`px-1 py-0.5 rounded-sm text-[8px] md:text-[9px] font-semibold ${
+                  incident.severity_guess === 'critical' ? 'bg-red-800 text-white' :
+                  incident.severity_guess === 'high' ? 'bg-red-600 text-white' :
+                  incident.severity_guess === 'medium' ? 'bg-yellow-500 text-black' :
+                  incident.severity_guess === 'low' ? 'bg-green-500 text-white' : 'bg-gray-200 text-black'
+                }`}>
+                  {incident.severity_guess ? incident.severity_guess.toUpperCase() : 'AUTO'}
                 </span>
               </div>
             </div>
