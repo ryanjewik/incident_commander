@@ -57,10 +57,58 @@ func (s *IncidentService) GetIncident(ctx context.Context, incidentID, organizat
 		return nil, fmt.Errorf("failed to get incident: %w", err)
 	}
 
-	var incident models.Incident
-	if err := doc.DataTo(&incident); err != nil {
-		return nil, fmt.Errorf("failed to parse incident: %w", err)
+	data := doc.Data()
+	incident := &models.Incident{}
+	if v, ok := data["id"].(string); ok {
+		incident.ID = v
+	} else {
+		incident.ID = doc.Ref.ID
 	}
+	if v, ok := data["organization_id"].(string); ok {
+		incident.OrganizationID = v
+	}
+	if v, ok := data["alert_id"].(string); ok {
+		incident.AlertID = v
+	}
+	if v, ok := data["title"].(string); ok {
+		incident.Title = v
+	}
+	if v, ok := data["status"].(string); ok {
+		incident.Status = v
+	}
+	if v, ok := data["date"].(string); ok {
+		incident.Date = v
+	}
+	if v, ok := data["type"].(string); ok {
+		incident.Type = v
+	}
+	if v, ok := data["description"].(string); ok {
+		incident.Description = v
+	}
+	if v, ok := data["created_by"].(string); ok {
+		incident.CreatedBy = v
+	}
+
+	if v, ok := data["created_at"].(time.Time); ok {
+		incident.CreatedAt = v
+	} else if v, ok := data["created_at"].(string); ok {
+		if t, err := time.Parse(time.RFC3339, v); err == nil {
+			incident.CreatedAt = t
+		}
+	}
+
+	if v, ok := data["updated_at"].(time.Time); ok {
+		incident.UpdatedAt = v
+	} else if v, ok := data["updated_at"].(string); ok {
+		if t, err := time.Parse(time.RFC3339, v); err == nil {
+			incident.UpdatedAt = t
+		}
+	}
+
+	if v, ok := data["metadata"].(map[string]interface{}); ok {
+		incident.Metadata = v
+	}
+
 	if incident.OrganizationID != organizationID {
 		return nil, fmt.Errorf("access denied")
 	}
@@ -209,6 +257,11 @@ func (s *IncidentService) UpdateIncident(ctx context.Context, incidentID string,
 	if req.Description != "" {
 		updates = append(updates, firestore.Update{Path: "description", Value: req.Description})
 		incident.Description = req.Description
+	}
+
+	if req.SeverityGuess != "" {
+		updates = append(updates, firestore.Update{Path: "severity_guess", Value: req.SeverityGuess})
+		incident.SeverityGuess = req.SeverityGuess
 	}
 	if req.Metadata != nil {
 		updates = append(updates, firestore.Update{Path: "metadata", Value: req.Metadata})

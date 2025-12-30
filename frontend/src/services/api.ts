@@ -114,6 +114,7 @@ export interface Incident {
   created_at: string;
   updated_at: string;
   metadata?: Record<string, any>;
+  severity_guess?: string;
   moderator_result?: ModeratorResult;
   moderator_timestamp?: string;
   // Add event property to match Firebase structure
@@ -157,6 +158,7 @@ export interface CreateIncidentRequest {
 export interface UpdateIncidentRequest {
   title?: string;
   status?: string;
+  severity_guess?: string;
   description?: string;
   metadata?: Record<string, any>;
 }

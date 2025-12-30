@@ -24,7 +24,7 @@ export default function Dashboard() {
         console.log("No user is logged in");
       }
     }, []);
-  const { signOut, userData, leaveOrganization, refreshUserData } = useAuth();
+  const { signOut, userData, leaveOrganization, refreshUserData, loading } = useAuth();
   
   const [selectedIncident, setSelectedIncident] = useState<string | null>(null);
   // showDashboard is read-only here (setter intentionally omitted to avoid unused variable)
@@ -68,6 +68,21 @@ export default function Dashboard() {
       return () => { mounted = false; };
     }
   }, [userData?.organization_id]);
+
+  // Ensure incidents load after auth finishes — helps when auth/user data arrives slightly later
+  useEffect(() => {
+    let mounted = true;
+    if (!loading && userData?.organization_id) {
+      // small debounce to let tokens settle
+      const t = setTimeout(() => {
+        if (!mounted) return;
+        loadUserOrganizations();
+        loadIncidents();
+      }, 150);
+      return () => { mounted = false; clearTimeout(t); };
+    }
+    return () => { mounted = false };
+  }, [loading, userData?.organization_id]);
 
   // Listen for global requests to open Organizations modal (used by child components)
   useEffect(() => {
@@ -115,18 +130,45 @@ export default function Dashboard() {
   };
 
   const handleStatusChange = async (incidentId: string, newStatus: string) => {
+    // Optimistic update + retry once if it fails (refresh auth tokens)
+    setIncidentData(prevData => 
+      prevData.map(incident => incident.id === incidentId ? { ...incident, status: newStatus } : incident)
+    );
+
     try {
       await apiService.updateIncident(incidentId, { status: newStatus });
-      setIncidentData(prevData => 
-        prevData.map(incident => 
-          incident.id === incidentId 
-            ? { ...incident, status: newStatus }
-            : incident
-        )
-      );
-    } catch (error) {
-      console.error('Failed to update incident status:', error);
-      alert('Failed to update incident status. Please try again.');
+    } catch (error: any) {
+      console.error('Failed to update incident status, retrying after refreshUserData:', error?.response?.status, error?.message);
+      try {
+        await refreshUserData();
+        await apiService.updateIncident(incidentId, { status: newStatus });
+      } catch (err) {
+        console.error('Retry failed:', err);
+        alert('Failed to update incident status. Please try again.');
+        // revert optimistic update
+        loadIncidents();
+      }
+    }
+  };
+
+  const handleSeverityChange = async (incidentId: string, newSeverity: string) => {
+    // Optimistic update and retry similar to status
+    setIncidentData(prevData => 
+      prevData.map(incident => incident.id === incidentId ? { ...incident, severity_guess: newSeverity } : incident)
+    );
+
+    try {
+      await apiService.updateIncident(incidentId, { severity_guess: newSeverity });
+    } catch (error: any) {
+      console.error('Failed to update incident severity, retrying after refreshUserData:', error?.response?.status, error?.message);
+      try {
+        await refreshUserData();
+        await apiService.updateIncident(incidentId, { severity_guess: newSeverity });
+      } catch (err) {
+        console.error('Retry failed:', err);
+        alert('Failed to update incident severity. Please try again.');
+        loadIncidents();
+      }
     }
   };
 
@@ -298,12 +340,14 @@ export default function Dashboard() {
                     selectedIncident={selectedIncident}
                     onSelectIncident={setSelectedIncident}
                     onStatusChange={handleStatusChange}
+                    onSeverityChange={handleSeverityChange}
                   />
                   <MainContent 
                     selectedIncident={selectedIncident}
                     incidentData={incidentData}
                     onClose={() => setSelectedIncident(null)}
                     onStatusChange={handleStatusChange}
+                    onSeverityChange={handleSeverityChange}
                   />
                 </>
               )}

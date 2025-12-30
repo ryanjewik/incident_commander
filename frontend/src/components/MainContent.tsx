@@ -9,6 +9,7 @@ interface Incident {
   date: string;
   type: string;
   description: string;
+  severity_guess?: string;
   // Add event property to match Firebase structure
   event?: {
     moderator_result?: {
@@ -47,6 +48,7 @@ interface DashboardSectionProps {
   incidentData: Incident[];
   onClose: () => void;
   onStatusChange: (incidentId: string, newStatus: string) => void;
+  onSeverityChange?: (incidentId: string, newSeverity: string) => void;
   onSendIncident?: (incidentId: string) => void;
 }
 
@@ -287,6 +289,25 @@ function MainContent({ selectedIncident, incidentData, onClose, onStatusChange, 
               }`}>
                 Status: {incident.status}
               </span>
+              <div className='flex items-center gap-2'>
+                <label className='text-xs md:text-sm font-semibold hidden md:block'>Severity</label>
+                <select
+                  value={incident.severity_guess || ''}
+                  onChange={(e) => onSeverityChange && onSeverityChange(incident.id, e.target.value)}
+                  className={`px-2 py-1 rounded-sm text-xs md:text-sm font-semibold border border-transparent focus:outline-none focus:ring-1 ${
+                    incident.severity_guess === 'critical' ? 'bg-red-700 text-white' :
+                    incident.severity_guess === 'high' ? 'bg-red-500 text-white' :
+                    incident.severity_guess === 'medium' ? 'bg-yellow-500 text-white' :
+                    incident.severity_guess === 'low' ? 'bg-green-500 text-white' : 'bg-gray-200 text-black'
+                  }`}
+                >
+                  <option value="">Auto</option>
+                  <option value="low">Low</option>
+                  <option value="medium">Medium</option>
+                  <option value="high">High</option>
+                  <option value="critical">Critical</option>
+                </select>
+              </div>
               <span className='px-2 py-1 rounded-sm text-xs font-semibold bg-orange-400 text-white'>
                 Date: {new Date(incident.date).toLocaleString()}
               </span>

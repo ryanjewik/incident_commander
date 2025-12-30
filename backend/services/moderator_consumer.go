@@ -125,6 +125,15 @@ func StartModeratorConsumer(firebaseService *FirebaseService) error {
 					{Path: "updated_at", Value: time.Now()},
 				}
 
+				// If moderator provided a severity_guess, write it as a top-level field for easier querying
+				if msg.Result != nil {
+					if sgRaw, ok := msg.Result["severity_guess"]; ok {
+						if sgStr, ok2 := sgRaw.(string); ok2 && sgStr != "" {
+							updates = append(updates, firestore.Update{Path: "severity_guess", Value: sgStr})
+						}
+					}
+				}
+
 				ctx := context.Background()
 				_, err := firebaseService.Firestore.Collection("incidents").Doc(msg.IncidentID).Update(ctx, updates)
 				if err != nil {
