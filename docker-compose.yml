@@ -92,7 +92,7 @@ services:
     env_file:
       - .env
     environment:
-      - CLIENT_PROPERTIES_PATH=/app/agents/common/client.properties
+      - CLIENT_PROPERTIES_PATH=/app/common/client.properties
       - FIREBASE_CREDENTIALS_PATH=/app/backend/firebase-service-account.json
       - GOOGLE_APPLICATION_CREDENTIALS=/app/backend/firebase-service-account.json
     # restart: unless-stopped  
@@ -113,7 +113,7 @@ services:
     env_file:
       - .env
     environment:
-      - EXPECTED_AGENTS=logs_traces_agent,rca_historical_agent
+      - EXPECTED_AGENTS=logs_traces_agent,rca_historical_agent,metrics_agent
       - CLIENT_PROPERTIES_PATH=/app/common/client.properties
       - FIREBASE_CREDENTIALS_PATH=/app/backend/firebase-service-account.json
       - GOOGLE_APPLICATION_CREDENTIALS=/app/backend/firebase-service-account.json
