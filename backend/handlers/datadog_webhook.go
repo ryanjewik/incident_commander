@@ -242,11 +242,16 @@ func (h *DatadogWebhookHandler) HandleDatadogWebhook(c *gin.Context) {
 				d := doc.Data()
 				if dsRaw, ok := d["datadog_secrets"]; ok {
 					if dsMap, ok2 := dsRaw.(map[string]interface{}); ok2 {
-						if ws, ok3 := dsMap["webhook_secret"].(string); ok3 && ws != "" && ws == secretHeader {
-							webhookAuth = true
+						// support both legacy plaintext (`webhook_secret`) and new hashed (`webhookSecret`) values
+						if ws, ok3 := dsMap["webhook_secret"].(string); ok3 && ws != "" {
+							if ws == secretHeader || services.CheckSecretHash(secretHeader, ws) {
+								webhookAuth = true
+							}
 						}
-						if ws2, ok4 := dsMap["webhookSecret"].(string); ok4 && ws2 != "" && ws2 == secretHeader {
-							webhookAuth = true
+						if ws2, ok4 := dsMap["webhookSecret"].(string); ok4 && ws2 != "" {
+							if ws2 == secretHeader || services.CheckSecretHash(secretHeader, ws2) {
+								webhookAuth = true
+							}
 						}
 					}
 				}

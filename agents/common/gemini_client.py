@@ -111,16 +111,59 @@ Provide a detailed analysis of the root cause.
 def gemini_json_call(
     client: genai.Client,
     model: str,
-    prompt: str,
+    prompt: Optional[str] = None,
+    system_instructions: Optional[str] = None,
+    payload: Optional[Any] = None,
 ) -> Dict[str, Any]:
-    """Make a JSON-formatted call to Gemini."""
+    """Make a JSON-formatted call to Gemini.
+
+    Backwards-compatible helper: callers may pass either a string `prompt`
+    or a structured `payload` plus optional `system_instructions`. When a
+    structured payload is provided we serialize it to JSON and prepend the
+    system_instructions (if any) so older call sites that pass
+    `system_instructions=`/`payload=` continue to work.
+    """
+    import json
+
+    if payload is not None:
+        # If payload is a dict, serialize it; otherwise coerce to string.
+        if isinstance(payload, (dict, list)):
+            payload_str = json.dumps(payload)
+        else:
+            payload_str = str(payload)
+        if system_instructions:
+            prompt_str = system_instructions + "\n\n" + payload_str
+        else:
+            prompt_str = payload_str
+    else:
+        prompt_str = prompt or ""
+
     response = client.models.generate_content(
         model=model,
-        contents=prompt,
+        contents=prompt_str,
         config=types.GenerateContentConfig(
             response_mime_type="application/json"
-        )
+        ),
     )
-    
-    import json
-    return json.loads(response.text)
+
+    # Try strict JSON parse first. If Gemini returned non-strict JSON
+    # (extra commentary, trailing commas, or plain text), attempt to
+    # recover by extracting the first JSON object substring. If that
+    # still fails, return a wrapper with the raw text so callers can
+    # handle it gracefully instead of crashing.
+    text = response.text
+    try:
+        return json.loads(text)
+    except Exception:
+        # attempt to find a JSON object within the text
+        try:
+            first = text.find("{")
+            last = text.rfind("}")
+            if first != -1 and last != -1 and last > first:
+                cand = text[first : last + 1]
+                return json.loads(cand)
+        except Exception:
+            pass
+    # fallback: return raw response under a known key so consumers
+    # can detect non-JSON output and inspect `__raw_response__`.
+    return {"__raw_response__": text}

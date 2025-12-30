@@ -4,6 +4,8 @@ import os
 import time
 from datetime import datetime, timezone
 from typing import Any, Dict
+import traceback
+import hashlib
 
 from agents.common.kafka_client import build_kafka_config, make_consumer, make_producer, ensure_topics
 from agents.common.datadog_client import (
@@ -13,7 +15,7 @@ from agents.common.datadog_client import (
     search_spans,
     download_snapshot_image,
 )
-from agents.common.gemini_client import build_gemini_client, analyze_incident_with_gemini
+from agents.common.gemini_client import build_gemini_client, gemini_json_call
 from agents.common.output_writer import write_agent_artifacts
 from concurrent.futures import ThreadPoolExecutor, Future
 import threading
@@ -31,6 +33,11 @@ def publish_json(producer, topic: str, payload: Dict[str, Any]) -> None:
     try:
         producer.produce(topic, json.dumps(payload).encode("utf-8"))
         producer.flush(10)
+        try:
+            # lightweight publish log (avoid dumping full payload)
+            print(f"[{AGENT_NAME}] published topic={topic} agent={payload.get('agent')} incident={payload.get('incident_id')} status={payload.get('status')}")
+        except Exception:
+            pass
     except Exception as e:
         print(f"[{AGENT_NAME}] failed to publish to topic={topic}: {e}")
 
@@ -70,8 +77,6 @@ def process_incident(
     producer,
     gemini,
     dd_site: str,
-    dd_api_key: str,
-    dd_app_key: str,
     gemini_model: str,
     started_topic: str,
     result_topic: str,
@@ -118,8 +123,16 @@ def process_incident(
                 if sk:
                     dd_api_key_used = sk.get("datadog_api_key")
                     dd_app_key_used = sk.get("datadog_app_key")
+                    print(f"[{AGENT_NAME}] fetched secrets for org={org_id} api_key_present={bool(dd_api_key_used)} app_key_present={bool(dd_app_key_used)}")
+                    try:
+                        api_fp = hashlib.sha256((dd_api_key_used or "").encode()).hexdigest()[:12]
+                        app_fp = hashlib.sha256((dd_app_key_used or "").encode()).hexdigest()[:12]
+                        print(f"[{AGENT_NAME}] datadog debug dd_site={dd_site} api_base=https://api.{dd_site} api_len={len(dd_api_key_used or '')} app_len={len(dd_app_key_used or '')} api_sha256={api_fp} app_sha256={app_fp}")
+                    except Exception:
+                        pass
         except Exception as e:
             print(f"[{AGENT_NAME}] secrets fetch error for org={org_id}: {e}")
+            traceback.print_exc()
 
         # If we couldn't obtain decrypted keys for this organization, fail fast.
         if not dd_api_key_used or not dd_app_key_used:
@@ -206,11 +219,15 @@ def process_incident(
                         )
                 except Exception as e:
                     print(f"[{AGENT_NAME}] fallback search error for query={fq}: {e}")
+                    traceback.print_exc()
                     candidate = []
                 if candidate:
                     logs = candidate
                     logs_query_used = fq
+                    print(f"[{AGENT_NAME}] fallback query succeeded fq={fq} results={len(candidate)}")
                     break
+            if not logs:
+                print(f"[{AGENT_NAME}] no logs found for incident={incident_id} using queries={fallback_queries}")
 
         if dd_sem:
             with dd_sem:
@@ -311,21 +328,61 @@ def process_incident(
             "span_samples": spans[:15],
         }
 
-        if gemini_sem:
-            with gemini_sem:
-                gemini_result = analyze_incident_with_gemini(
+        # Request strict JSON from Gemini to avoid markdown output.
+        logs_for_gemini = incident_context.get("log_samples", []) or logs[:15]
+        payload = {
+            "task": "Analyze logs and traces and return a STRICT JSON report.",
+            "incident_context": incident_context,
+            "logs": logs_for_gemini,
+        }
+        system_instructions = (
+            "You are an incident analysis assistant. Return STRICT JSON only with the schema: "
+            "{\"summary\":\"string\", \"analysis\":\"string\", \"recommendations\": [\"string\"], "
+            "\"confidence\": \"number\", \"debug\": {}}. DO NOT include markdown, bullet points, or any text outside the JSON object."
+        )
+        try:
+            if gemini_sem:
+                with gemini_sem:
+                    gemini_result = gemini_json_call(
+                        client=gemini,
+                        model=gemini_model,
+                        system_instructions=system_instructions,
+                        payload=payload,
+                    )
+            else:
+                gemini_result = gemini_json_call(
                     client=gemini,
                     model=gemini_model,
-                    incident_context=incident_context,
-                    snapshot_png_bytes=snapshot_bytes,
+                    system_instructions=system_instructions,
+                    payload=payload,
                 )
-        else:
-            gemini_result = analyze_incident_with_gemini(
-                client=gemini,
-                model=gemini_model,
-                incident_context=incident_context,
-                snapshot_png_bytes=snapshot_bytes,
-            )
+            if not isinstance(gemini_result, dict):
+                gemini_result = {"summary": str(gemini_result), "analysis": None, "recommendations": None}
+        except Exception as e:
+            print(f"[{AGENT_NAME}] Gemini JSON call failed: {e}")
+            gemini_result = {"summary": None, "analysis": None, "recommendations": None}
+        print(f"[{AGENT_NAME}] gemini_result type={type(gemini_result)}")
+
+        # Normalize Gemini output: ensure `gemini_result` becomes a stable dict
+        # The helper may return (text, key_index) or raw string; normalize similar to metrics_agent.
+        try:
+            # If tuple/list like (text, index)
+            if isinstance(gemini_result, (list, tuple)):
+                if len(gemini_result) == 2 and isinstance(gemini_result[1], int):
+                    gemini_text = gemini_result[0]
+                    gemini_result = {"summary": gemini_text or "", "analysis": None, "recommendations": None}
+                else:
+                    # flatten other list/tuple forms
+                    gemini_result = {"summary": json.dumps(gemini_result), "analysis": None, "recommendations": None}
+            elif gemini_result is None or isinstance(gemini_result, str):
+                gemini_result = {"summary": gemini_result or "", "analysis": None, "recommendations": None}
+            elif isinstance(gemini_result, dict):
+                # keep as-is
+                pass
+            else:
+                gemini_result = {"summary": str(gemini_result), "analysis": None, "recommendations": None}
+        except Exception:
+            gemini_result = {"summary": str(gemini_result), "analysis": None, "recommendations": None}
 
         final_payload = {
             "agent": AGENT_NAME,
@@ -346,18 +403,37 @@ def process_incident(
 
         artifact_paths = write_agent_artifacts(incident_id=incident_id, agent_name=AGENT_NAME, payload=final_payload)
         final_payload["artifacts"] = artifact_paths
+        print(f"[{AGENT_NAME}] wrote artifacts for incident={incident_id}: {artifact_paths}")
 
         publish_json(producer, result_topic, final_payload)
         print(f"[{AGENT_NAME}] completed incident_id={incident_id}")
 
     except Exception as e:
         print(f"[{AGENT_NAME}] error processing incident: {e}")
+        traceback.print_exc()
+        try:
+            publish_json(
+                producer,
+                result_topic,
+                {
+                    "agent": AGENT_NAME,
+                    "incident_id": incident_id,
+                    "organization_id": org_id,
+                    "timestamp": utc_now_iso(),
+                    "status": "failed",
+                    "error": str(e),
+                },
+            )
+        except Exception as e2:
+            print(f"[{AGENT_NAME}] failed to publish failure result: {e2}")
+            traceback.print_exc()
 
 
 def main() -> None:
-    dd_api_key = os.environ["DD_API_KEY"]
-    dd_app_key = os.environ["DD_APP_KEY"]
-    dd_site = os.environ["DD_SITE"]
+    # Prefer per-organization Datadog keys via `SecretsClient`.
+    # Use env vars only as a non-fatal fallback for local dev; do not crash at startup if missing.
+    # Do not read global Datadog keys from environment; use per-org secrets via SecretsClient only.
+    dd_site = os.getenv("DD_SITE", "datadoghq.com")
 
     gemini_key = os.environ["GEMINI_API_KEY"]
     gemini_model = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
@@ -417,8 +493,6 @@ def main() -> None:
                 producer,
                 gemini,
                 dd_site,
-                dd_api_key,
-                dd_app_key,
                 gemini_model,
                 started_topic,
                 result_topic,

@@ -9,9 +9,10 @@ import threading
 
 from agents.common.kafka_client import build_kafka_config, make_consumer, make_producer, ensure_topics
 from agents.common.datadog_client import query_timeseries, get_monitor_details, download_snapshot_image
-from agents.common.gemini_client import build_gemini_client, analyze_metrics_with_gemini
+from agents.common.gemini_client import build_gemini_client, gemini_json_call
 from agents.common.output_writer import write_agent_artifacts
 from agents.common.secrets_client import SecretsClient
+import traceback
 
 
 AGENT_NAME = "metrics_agent"
@@ -269,26 +270,61 @@ def process_incident(
             "timeseries": timeseries_data,
         }
 
-        print(f"[{AGENT_NAME}] DEBUG: Calling Gemini for metrics analysis with key_index={current_key_index}")
-        if gemini_sem:
-            with gemini_sem:
-                gemini_result, new_key_index = analyze_metrics_with_gemini(
+        print(f"[{AGENT_NAME}] DEBUG: Calling Gemini for metrics analysis (JSON schema) with key_index={current_key_index}")
+        # Build a structured payload and request strict JSON from Gemini to avoid markdown
+        payload = {
+            "task": "Analyze metrics and provide a concise JSON report.",
+            "incident_context": {
+                "incident_id": incident_id,
+                "monitor": incident_context.get("monitor"),
+                "time_window_ms": incident_context.get("time_window_ms"),
+                "timeseries": incident_context.get("timeseries"),
+            },
+        }
+        system_instructions = (
+            "You are an incident metrics analyst. Return STRICT JSON only with the following schema: "
+            "{\"summary\":\"string\", \"analysis\":\"string\", \"recommendations\": [\"string\"], \"confidence\": "
+            "\"number\", \"debug\": {}}. Do NOT include any markdown, lists, or extraneous text."
+        )
+        try:
+            if gemini_sem:
+                with gemini_sem:
+                    gemini_result = gemini_json_call(
+                        client=gemini,
+                        model=gemini_model,
+                        system_instructions=system_instructions,
+                        payload=payload,
+                    )
+            else:
+                gemini_result = gemini_json_call(
                     client=gemini,
                     model=gemini_model,
-                    incident_context=incident_context,
-                    snapshot_png_bytes=snapshot_bytes,
-                    api_keys=gemini_keys,
-                    current_key_index=current_key_index,
+                    system_instructions=system_instructions,
+                    payload=payload,
                 )
-        else:
-            gemini_result, new_key_index = analyze_metrics_with_gemini(
-                client=gemini,
-                model=gemini_model,
-                incident_context=incident_context,
-                snapshot_png_bytes=snapshot_bytes,
-                api_keys=gemini_keys,
-                current_key_index=current_key_index,
-            )
+            # Ensure result is a dict
+            if not isinstance(gemini_result, dict):
+                gemini_result = {"summary": str(gemini_result), "analysis": None, "recommendations": None}
+            new_key_index = current_key_index
+        except Exception as e:
+            print(f"[{AGENT_NAME}] Gemini JSON call failed: {e}")
+            gemini_result = {"summary": None, "analysis": None, "recommendations": None}
+            new_key_index = current_key_index
+
+        # Normalize Gemini output: ensure `gemini_result` is a dict with expected keys
+        if gemini_result is None or isinstance(gemini_result, str):
+            gemini_result = {
+                "summary": gemini_result or "",
+                "analysis": None,
+                "recommendations": None,
+            }
+        elif isinstance(gemini_result, (list, tuple)):
+            # If an LLM helper returned a raw string in a single-item list, flatten it
+            if len(gemini_result) == 1 and isinstance(gemini_result[0], str):
+                gemini_result = {"summary": gemini_result[0], "analysis": None, "recommendations": None}
+            else:
+                # convert to a stable dict form
+                gemini_result = {"summary": json.dumps(gemini_result), "analysis": None, "recommendations": None}
         
         # Update global key index if rotation occurred
         if new_key_index != current_key_index:
@@ -326,7 +362,26 @@ def process_incident(
         print(f"[{AGENT_NAME}] completed incident_id={incident_id}")
 
     except Exception as e:
-        print(f"[{AGENT_NAME}] error processing incident: {e}")
+        err_str = f"{e}"
+        print(f"[{AGENT_NAME}] error processing incident: {err_str}")
+        tb = traceback.format_exc()
+        print(tb)
+        try:
+            publish_json(
+                producer,
+                result_topic,
+                {
+                    "agent": AGENT_NAME,
+                    "incident_id": raw.get("incident_id", ""),
+                    "organization_id": raw.get("organization_id", ""),
+                    "timestamp": utc_now_iso(),
+                    "status": "failed",
+                    "error": err_str,
+                    "traceback": tb,
+                },
+            )
+        except Exception as e2:
+            print(f"[{AGENT_NAME}] failed to publish failure payload: {e2}")
 
 
 def main() -> None:
