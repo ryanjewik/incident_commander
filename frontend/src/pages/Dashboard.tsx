@@ -27,7 +27,8 @@ export default function Dashboard() {
   const { signOut, userData, leaveOrganization, refreshUserData } = useAuth();
   
   const [selectedIncident, setSelectedIncident] = useState<string | null>(null);
-  const [showDashboard, setShowDashboard] = useState(false);
+  // showDashboard is read-only here (setter intentionally omitted to avoid unused variable)
+  const showDashboard = useState(false)[0];
   const [showOrgsModal, setShowOrgsModal] = useState(false);
   const [showMemberModal, setShowMemberModal] = useState(false);
   const [showLeaveConfirm, setShowLeaveConfirm] = useState(false);
@@ -67,6 +68,13 @@ export default function Dashboard() {
       return () => { mounted = false; };
     }
   }, [userData?.organization_id]);
+
+  // Listen for global requests to open Organizations modal (used by child components)
+  useEffect(() => {
+    const handler = () => setShowOrgsModal(true);
+    window.addEventListener('openOrganizations', handler as EventListener);
+    return () => window.removeEventListener('openOrganizations', handler as EventListener);
+  }, []);
 
   const loadUserOrganizations = async () => {
     try {
@@ -165,12 +173,7 @@ export default function Dashboard() {
               ))}
             </select>
           )}
-          <button
-            onClick={() => setShowDashboard(!showDashboard)}
-            className="bg-purple-700 text-white px-3 py-1.5 text-sm rounded-md hover:bg-purple-800 font-medium transition-colors"
-          >
-            {showDashboard ? 'Incidents' : 'Dashboard'}
-          </button>
+          {/* Dashboard toggle removed per UI request */}
           <button
             onClick={() => setShowOrgsModal(true)}
             className="bg-purple-700 text-white px-3 py-1.5 text-sm rounded-md hover:bg-purple-800 font-medium transition-colors"

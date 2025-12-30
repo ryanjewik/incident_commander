@@ -21,7 +21,6 @@ interface DatadogSettings {
   systemMetrics: boolean;
   alertStatus: boolean;
   activityFeed: boolean;
-  securitySignals: boolean;
   liveLogs: boolean;
 }
 // Extend Organization type to include optional datadog_secrets
@@ -89,7 +88,6 @@ export default function MemberManagementModal({ onClose, orgId, onBack }: Member
     systemMetrics: false,
     alertStatus: false,
     activityFeed: false,
-    securitySignals: false,
     liveLogs: false,
   });
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
@@ -148,7 +146,7 @@ export default function MemberManagementModal({ onClose, orgId, onBack }: Member
         }
 
         // load settings independently of secrets presence
-        if (orgWithDatadog.datadog_settings) {
+          if (orgWithDatadog.datadog_settings) {
           const toBool = (v: any) => {
             if (typeof v === 'boolean') return v;
             if (typeof v === 'string') return v.toLowerCase() === 'true';
@@ -159,16 +157,15 @@ export default function MemberManagementModal({ onClose, orgId, onBack }: Member
             systemMetrics: toBool(orgWithDatadog.datadog_settings.systemMetrics),
             alertStatus: toBool(orgWithDatadog.datadog_settings.alertStatus),
             activityFeed: toBool(orgWithDatadog.datadog_settings.activityFeed),
-            securitySignals: toBool(orgWithDatadog.datadog_settings.securitySignals),
             liveLogs: toBool(orgWithDatadog.datadog_settings.liveLogs),
           });
         } else {
-          setDatadogSettings({ systemMetrics: false, alertStatus: false, activityFeed: false, securitySignals: false, liveLogs: false });
+          setDatadogSettings({ systemMetrics: false, alertStatus: false, activityFeed: false, liveLogs: false });
         }
       } else {
         // No stored datadog config — keep inputs empty and toggles at their initial (false) state
           setDatadogSecrets({ apiKey: '', appKey: '', webhookSecret: '', clientId: '' });
-        setDatadogSettings({ systemMetrics: false, alertStatus: false, activityFeed: false, securitySignals: false, liveLogs: false });
+        setDatadogSettings({ systemMetrics: false, alertStatus: false, activityFeed: false, liveLogs: false });
       }
     } catch (err) {
       console.error('Failed to load organization:', err);
@@ -444,7 +441,7 @@ export default function MemberManagementModal({ onClose, orgId, onBack }: Member
                     <Toggle label="System Metrics" checked={datadogSettings.systemMetrics} onChange={v => setDatadogSettings(s => ({ ...s, systemMetrics: v }))} disabled={loadingOrg} />
                     <Toggle label="Alert Status" checked={datadogSettings.alertStatus} onChange={v => setDatadogSettings(s => ({ ...s, alertStatus: v }))} disabled={loadingOrg} />
                     <Toggle label="Activity Feed" checked={datadogSettings.activityFeed} onChange={v => setDatadogSettings(s => ({ ...s, activityFeed: v }))} disabled={loadingOrg} />
-                    <Toggle label="Security Signals" checked={datadogSettings.securitySignals} onChange={v => setDatadogSettings(s => ({ ...s, securitySignals: v }))} disabled={loadingOrg} />
+                    {/* Security Signals toggle removed */}
                     <Toggle label="Live Logs" checked={datadogSettings.liveLogs} onChange={v => setDatadogSettings(s => ({ ...s, liveLogs: v }))} disabled={loadingOrg} />
                   </div>
                 </div>

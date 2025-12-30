@@ -682,6 +682,34 @@ func (h *AuthHandler) GetOrgJoinRequests(c *gin.Context) {
 	c.JSON(http.StatusOK, requests)
 }
 
+// GetOrganization returns organization document including datadog_settings/secrets for members
+func (h *AuthHandler) GetOrganization(c *gin.Context) {
+	userID := middleware.GetUserID(c)
+	orgID := c.Param("orgId")
+	if orgID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "orgId required"})
+		return
+	}
+	ctx := c.Request.Context()
+	// ensure requester is a member of the org
+	membership, err := h.userService.GetMembership(ctx, userID, orgID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if membership == nil {
+		c.JSON(http.StatusForbidden, gin.H{"error": "not a member of organization"})
+		return
+	}
+
+	org, err := h.userService.GetOrganization(ctx, orgID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, org)
+}
+
 // SaveDatadogSecrets saves masked Datadog secrets and dashboard settings for an organization.
 func (h *AuthHandler) SaveDatadogSecrets(c *gin.Context) {
 	userID := middleware.GetUserID(c)
@@ -750,7 +778,7 @@ func (h *AuthHandler) SaveDatadogSecrets(c *gin.Context) {
 	if settings == nil {
 		settings = map[string]interface{}{}
 		// copy known toggles if present
-		for _, k := range []string{"systemMetrics", "alertStatus", "activityFeed", "securitySignals", "liveLogs"} {
+		for _, k := range []string{"systemMetrics", "alertStatus", "activityFeed", "liveLogs"} {
 			if val, ok := payload[k]; ok {
 				settings[k] = val
 			}
