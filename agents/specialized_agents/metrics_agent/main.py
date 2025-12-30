@@ -51,6 +51,11 @@ def build_metric_queries(raw: Dict[str, Any], monitor_query: str) -> list[str]:
     elif service:
         queries.append(f"avg:system.cpu.user{{service:{service}}}")
         queries.append(f"avg:system.mem.used{{service:{service}}}")
+        queries.append(f"avg:system.load.1{{service:{service}}}")
+    elif env:
+        queries.append(f"avg:system.cpu.user{{env:{env}}}")
+        queries.append(f"avg:system.mem.used{{env:{env}}}")
+        queries.append(f"avg:system.load.1{{env:{env}}}")
     
     return queries
 
@@ -64,7 +69,8 @@ def process_incident(
     started_topic: str,
     result_topic: str,
     gemini_keys: list[str],
-    current_key_index: int,
+    key_index_holder: Dict[str, int],
+    key_lock: threading.Lock,
     dd_sem=None,
     gemini_sem=None,
     secrets_client: SecretsClient | None = None,
@@ -72,6 +78,19 @@ def process_incident(
     try:
         incident_id = raw.get("incident_id", "")
         org_id = raw.get("organization_id", "")
+        
+        # DEBUG: Log incident details and timestamp
+        last_updated_ms = int(raw.get("raw_payload_ref", {}).get("event", {}).get("last_updated_ms", "0") or "0")
+        incident_time = datetime.fromtimestamp(last_updated_ms / 1000, tz=timezone.utc) if last_updated_ms else None
+        current_time = datetime.now(timezone.utc)
+        age_minutes = (current_time - incident_time).total_seconds() / 60 if incident_time else None
+        
+        print(f"[{AGENT_NAME}] DEBUG: Processing incident_id={incident_id}, org_id={org_id}")
+        print(f"[{AGENT_NAME}] DEBUG: Incident timestamp={incident_time}, age={age_minutes:.1f} minutes" if age_minutes else f"[{AGENT_NAME}] DEBUG: Incident timestamp unavailable")
+        
+        with key_lock:
+            current_key_index = key_index_holder["index"]
+        print(f"[{AGENT_NAME}] DEBUG: Using Gemini key index={current_key_index} of {len(gemini_keys)} available keys")
         
         publish_json(
             producer,
@@ -85,14 +104,15 @@ def process_incident(
             },
         )
 
-        last_updated_ms = int(raw.get("raw_payload_ref", {}).get("event", {}).get("last_updated_ms", "0") or "0")
         from_ms = max(0, last_updated_ms - 30 * 60 * 1000)
         to_ms = last_updated_ms + 5 * 60 * 1000
+        print(f"[{AGENT_NAME}] DEBUG: Time window: from_ms={from_ms}, to_ms={to_ms}")
 
         monitor_id_str = raw.get("monitor_id", "")
         monitor_id = None
         if isinstance(monitor_id_str, str) and monitor_id_str.isdigit():
             monitor_id = int(monitor_id_str)
+        print(f"[{AGENT_NAME}] DEBUG: monitor_id={monitor_id}")
 
         # Resolve per-organization Datadog keys (backend-decrypted).
         # Do NOT fall back to environment variables for Datadog API/app keys.
@@ -100,10 +120,14 @@ def process_incident(
         dd_app_key_used = None
         try:
             if secrets_client and org_id:
+                print(f"[{AGENT_NAME}] DEBUG: Fetching Datadog keys for org_id={org_id}")
                 sk = secrets_client.get_datadog_keys(org_id)
                 if sk:
                     dd_api_key_used = sk.get("datadog_api_key")
                     dd_app_key_used = sk.get("datadog_app_key")
+                    print(f"[{AGENT_NAME}] DEBUG: Successfully retrieved Datadog keys for org_id={org_id}")
+                else:
+                    print(f"[{AGENT_NAME}] DEBUG: No Datadog keys returned for org_id={org_id}")
         except Exception as e:
             print(f"[{AGENT_NAME}] secrets fetch error for org={org_id}: {e}")
 
@@ -128,6 +152,7 @@ def process_incident(
         monitor_details = {}
         monitor_query = ""
         if monitor_id:
+            print(f"[{AGENT_NAME}] DEBUG: Fetching monitor details for monitor_id={monitor_id}")
             if dd_sem:
                 with dd_sem:
                     monitor_details = get_monitor_details(
@@ -144,13 +169,16 @@ def process_incident(
                     monitor_id=monitor_id,
                 )
             monitor_query = monitor_details.get("query", "")
+            print(f"[{AGENT_NAME}] DEBUG: Monitor query='{monitor_query}'")
 
         metric_queries = build_metric_queries(raw, monitor_query)
+        print(f"[{AGENT_NAME}] DEBUG: Built {len(metric_queries)} metric queries: {metric_queries}")
 
         timeseries_data = []
-        for query in metric_queries:
+        for idx, query in enumerate(metric_queries):
             if not query:
                 continue
+            print(f"[{AGENT_NAME}] DEBUG: Querying timeseries {idx+1}/{len(metric_queries)}: '{query}'")
             if dd_sem:
                 with dd_sem:
                     ts_result = query_timeseries(
@@ -172,16 +200,56 @@ def process_incident(
                 )
             if ts_result:
                 timeseries_data.append({"query": query, "result": ts_result})
+                print(f"[{AGENT_NAME}] DEBUG: Timeseries query returned data")
+            else:
+                print(f"[{AGENT_NAME}] DEBUG: Timeseries query returned no data")
 
         snapshot_url = raw.get("raw_payload_ref", {}).get("event", {}).get("snapshot_url", "") or ""
         snapshot_bytes = None
         if snapshot_url:
+            print(f"[{AGENT_NAME}] DEBUG: Downloading snapshot from {snapshot_url}")
             try:
                 snapshot_bytes = download_snapshot_image(snapshot_url)
+                print(f"[{AGENT_NAME}] DEBUG: Snapshot downloaded, size={len(snapshot_bytes)} bytes")
             except Exception as e:
                 print(f"[{AGENT_NAME}] snapshot download failed: {e}")
 
         event = raw.get("raw_payload_ref", {}).get("event", {}) or {}
+
+        # Skip Gemini call if no timeseries data available
+        if not timeseries_data:
+            print(f"[{AGENT_NAME}] DEBUG: No timeseries data available, skipping Gemini analysis")
+            final_payload = {
+                "agent": AGENT_NAME,
+                "incident_id": incident_id,
+                "organization_id": org_id,
+                "timestamp": utc_now_iso(),
+                "status": "no_metrics_available",
+                "result": {
+                    "summary": "No metric data available for analysis. This incident may not be metrics-related or lacks proper service/env tags.",
+                    "analysis": None,
+                    "recommendations": None,
+                },
+                "debug": {
+                    "monitor_query": monitor_query,
+                    "metric_queries": metric_queries,
+                    "from_ms": from_ms,
+                    "to_ms": to_ms,
+                    "snapshot_included": bool(snapshot_bytes),
+                    "timeseries_count": 0,
+                },
+            }
+            
+            artifact_paths = write_agent_artifacts(
+                incident_id=incident_id,
+                agent_name=AGENT_NAME,
+                payload=final_payload,
+            )
+            final_payload["artifacts"] = artifact_paths
+            
+            publish_json(producer, result_topic, final_payload)
+            print(f"[{AGENT_NAME}] completed incident_id={incident_id} (no metrics)")
+            return
 
         incident_context: Dict[str, Any] = {
             "incident_id": incident_id,
@@ -201,6 +269,7 @@ def process_incident(
             "timeseries": timeseries_data,
         }
 
+        print(f"[{AGENT_NAME}] DEBUG: Calling Gemini for metrics analysis with key_index={current_key_index}")
         if gemini_sem:
             with gemini_sem:
                 gemini_result, new_key_index = analyze_metrics_with_gemini(
@@ -220,6 +289,13 @@ def process_incident(
                 api_keys=gemini_keys,
                 current_key_index=current_key_index,
             )
+        
+        # Update global key index if rotation occurred
+        if new_key_index != current_key_index:
+            with key_lock:
+                key_index_holder["index"] = new_key_index
+            print(f"[{AGENT_NAME}] DEBUG: Gemini key rotated from index {current_key_index} to {new_key_index}")
+        print(f"[{AGENT_NAME}] DEBUG: Gemini analysis completed")
 
         final_payload = {
             "agent": AGENT_NAME,
@@ -235,6 +311,7 @@ def process_incident(
                 "to_ms": to_ms,
                 "snapshot_included": bool(snapshot_bytes),
                 "timeseries_count": len(timeseries_data),
+                "gemini_key_index_used": new_key_index,
             },
         }
 
@@ -257,6 +334,7 @@ def main() -> None:
     
     # Load Datadog site (still needed for API base URL construction)
     dd_site = os.environ.get("DD_SITE", "datadoghq.com")
+    print(f"[{AGENT_NAME}] DEBUG: dd_site={dd_site}")
 
     # Load multiple Gemini API keys for rotation
     gemini_keys = []
@@ -277,15 +355,21 @@ def main() -> None:
     print(f"[{AGENT_NAME}] loaded {len(gemini_keys)} Gemini API key(s)")
     
     gemini_model = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
+    print(f"[{AGENT_NAME}] DEBUG: gemini_model={gemini_model}")
 
     client_props_path = os.getenv("CLIENT_PROPERTIES_PATH", "/app/agents/common/client.properties")
+    print(f"[{AGENT_NAME}] DEBUG: client_props_path={client_props_path}")
 
     incidents_topic = "incidents_created"
     started_topic = "agent_started"
     result_topic = "agent_result"
 
+    print(f"[{AGENT_NAME}] DEBUG: Building Kafka config")
     cfg = build_kafka_config(client_props_path, os.environ)
-    consumer = make_consumer(cfg, group_id="metrics-agent-v3", auto_offset_reset="earliest")
+    
+    consumer_group = "metrics-agent-v4"
+    print(f"[{AGENT_NAME}] DEBUG: Creating consumer with group_id={consumer_group}, auto_offset_reset=latest")
+    consumer = make_consumer(cfg, group_id=consumer_group, auto_offset_reset="latest")
     producer = make_producer(cfg)
 
     try:
@@ -293,14 +377,18 @@ def main() -> None:
     except Exception as e:
         print(f"[{AGENT_NAME}] ensure_topics failed: {e}")
 
+    print(f"[{AGENT_NAME}] DEBUG: Subscribing to topic={incidents_topic}")
     consumer.subscribe([incidents_topic])
 
     try:
         gemini = build_gemini_client(gemini_keys[0])
+        print(f"[{AGENT_NAME}] DEBUG: Initialized Gemini client with first key")
     except Exception as e:
         raise RuntimeError(f"Failed to initialize Gemini client: {e}")
     
-    current_key_index = 0
+    # Thread-safe key index holder
+    key_index_holder = {"index": 0}
+    key_lock = threading.Lock()
 
     # Secrets client to fetch per-organization decrypted keys from backend
     secrets_client = SecretsClient()
@@ -310,13 +398,19 @@ def main() -> None:
     gemini_max = int(os.getenv("GEMINI_MAX_CONCURRENT", "2"))
     dd_sem = threading.BoundedSemaphore(dd_max)
     gemini_sem = threading.BoundedSemaphore(gemini_max)
+    print(f"[{AGENT_NAME}] DEBUG: dd_max_concurrent={dd_max}, gemini_max_concurrent={gemini_max}")
 
     print(f"[{AGENT_NAME}] consuming topic={incidents_topic}")
     max_workers = int(os.getenv("AGENT_MAX_WORKERS", "4"))
+    print(f"[{AGENT_NAME}] DEBUG: max_workers={max_workers}")
     executor = ThreadPoolExecutor(max_workers=max_workers)
     pending: list[Future] = []
+    
+    message_count = 0
+    start_time = datetime.now(timezone.utc)
 
     try:
+        print(f"[{AGENT_NAME}] DEBUG: Starting consumer poll loop at {start_time}")
         while True:
             msg = consumer.poll(1.0)
             if msg is None:
@@ -326,6 +420,10 @@ def main() -> None:
                 print(f"[{AGENT_NAME}] consumer error: {msg.error()}")
                 continue
 
+            message_count += 1
+            elapsed_seconds = (datetime.now(timezone.utc) - start_time).total_seconds()
+            print(f"[{AGENT_NAME}] DEBUG: Received message #{message_count} (elapsed={elapsed_seconds:.1f}s), offset={msg.offset()}, partition={msg.partition()}")
+            
             raw = json.loads(msg.value().decode("utf-8"))
 
             # Throttle submission if too many pending tasks
@@ -344,7 +442,8 @@ def main() -> None:
                 started_topic,
                 result_topic,
                 gemini_keys,
-                current_key_index,
+                key_index_holder,
+                key_lock,
                 dd_sem,
                 gemini_sem,
                 secrets_client,
