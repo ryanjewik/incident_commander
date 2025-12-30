@@ -31,9 +31,9 @@ type CreateIncidentRequest struct {
 
 // UpdateIncidentRequest is the request body for updating an incident
 type UpdateIncidentRequest struct {
-	Title       string                 `json:"title,omitempty"`
-	Status      string                 `json:"status,omitempty"`
-	SeverityGuess string               `json:"severity_guess,omitempty"`
-	Description string                 `json:"description,omitempty"`
-	Metadata    map[string]interface{} `json:"metadata,omitempty"`
+	Title         string                 `json:"title,omitempty"`
+	Status        string                 `json:"status,omitempty"`
+	SeverityGuess string                 `json:"severity_guess,omitempty"`
+	Description   string                 `json:"description,omitempty"`
+	Metadata      map[string]interface{} `json:"metadata,omitempty"`
 }
