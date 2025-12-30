@@ -1,5 +1,6 @@
 import ChatPanel from './ChatPanel';
 import { useState, useRef } from 'react';
+import React from 'react';
 
 interface Incident {
   id: string;
@@ -8,6 +9,37 @@ interface Incident {
   date: string;
   type: string;
   description: string;
+  // Add event property to match Firebase structure
+  event?: {
+    moderator_result?: {
+      confidence?: number;
+      incident_summary: string;
+      most_likely_root_cause: string;
+      reasoning: string;
+      severity_guess: string;
+      agent_disagreements?: Array<{
+        agent: string;
+        disagreement: string;
+        confidence: number;
+      }>;
+      do_this_now?: string[];
+      next_60_minutes?: string[];
+      tradeoffs_and_risks?: string[];
+      what_to_monitor?: string[];
+    };
+    moderator_timestamp?: string;
+    title?: string;
+    type?: string;
+  };
+  // Keep these for backward compatibility if some incidents have data at top level
+  moderator_result?: {
+    confidence?: number;
+    incident_summary: string;
+    most_likely_root_cause: string;
+    reasoning: string;
+    severity_guess: string;
+  };
+  moderator_timestamp?: string;
 }
 
 interface DashboardSectionProps {
@@ -18,12 +50,110 @@ interface DashboardSectionProps {
   onSendIncident?: (incidentId: string) => void;
 }
 
+function formatDatadogDescription(description: string): React.ReactElement {
+  if (!description) return <></>;
+  
+  // Remove leading %%% markers
+  let formatted = description.replace(/^%%%\s*/gm, '');
+  
+  // Extract and format the main alert message (first line)
+  const lines = formatted.split('\n').filter(line => line.trim());
+  const alertTitle = lines[0]?.trim() || '';
+  
+  // Extract metric details
+  const metricMatch = formatted.match(/\*\*([^*]+)\*\* over \*\*([^*]+)\*\* was \*\*([^*]+)\*\*/);
+  const timeframeMatch = formatted.match(/during the \*\*([^*]+)\*\*/);
+  const timestampMatch = formatted.match(/at (.+?)\. -/);
+  
+  // Extract threshold from title
+  const thresholdMatch = alertTitle.match(/Threshold=(\S+)/);
+  
+  // Extract links
+  const monitorStatusMatch = formatted.match(/\[\[Monitor Status\]\(([^)]+)\)\]/);
+  const editMonitorMatch = formatted.match(/\[\[Edit Monitor\]\(([^)]+)\)\]/);
+  const graphMatch = formatted.match(/\[!\[Metric Graph\]\([^)]+\)\]\(([^)]+)\)/);
+  
+  return (
+    <div className="space-y-2">
+      <div className="font-semibold text-gray-800 border-b border-gray-300 pb-1">
+        {alertTitle.split('Threshold=')[0].trim()}
+      </div>
+      
+      {(metricMatch || thresholdMatch) && (
+        <div className="bg-blue-50 p-2 rounded border border-blue-200">
+          <div className="font-semibold text-blue-900 text-xs mb-1">📊 Metric Details</div>
+          <div className="text-xs space-y-0.5 text-gray-700">
+            {metricMatch && (
+              <>
+                <div><span className="font-medium">Metric:</span> {metricMatch[1]}</div>
+                <div><span className="font-medium">Scope:</span> {metricMatch[2]}</div>
+                <div><span className="font-medium">Condition:</span> {metricMatch[3]}</div>
+              </>
+            )}
+            {thresholdMatch && (
+              <div><span className="font-medium">Threshold:</span> {thresholdMatch[1]}</div>
+            )}
+            {timeframeMatch && (
+              <div><span className="font-medium">Timeframe:</span> {timeframeMatch[1]}</div>
+            )}
+          </div>
+        </div>
+      )}
+      
+      {timestampMatch && (
+        <div className="bg-orange-50 p-2 rounded border border-orange-200">
+          <div className="text-xs text-gray-700">
+            <span className="font-medium">⏰ Last Triggered:</span> {timestampMatch[1]}
+          </div>
+        </div>
+      )}
+      
+      {(monitorStatusMatch || editMonitorMatch || graphMatch) && (
+        <div className="bg-purple-50 p-2 rounded border border-purple-200">
+          <div className="font-semibold text-purple-900 text-xs mb-1">🔗 Quick Actions</div>
+          <div className="text-xs space-y-0.5">
+            {graphMatch && (
+              <div>
+                <a href={graphMatch[1]} target="_blank" rel="noopener noreferrer" 
+                   className="text-blue-600 hover:text-blue-800 underline">
+                  View Metric Graph →
+                </a>
+              </div>
+            )}
+            {monitorStatusMatch && (
+              <div>
+                <a href={monitorStatusMatch[1]} target="_blank" rel="noopener noreferrer" 
+                   className="text-blue-600 hover:text-blue-800 underline">
+                  Monitor Status →
+                </a>
+              </div>
+            )}
+            {editMonitorMatch && (
+              <div>
+                <a href={editMonitorMatch[1]} target="_blank" rel="noopener noreferrer" 
+                   className="text-blue-600 hover:text-blue-800 underline">
+                  Edit Monitor →
+                </a>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function MainContent({ selectedIncident, incidentData, onClose, onStatusChange, onSendIncident }: DashboardSectionProps) {
   const [queryText, setQueryText] = useState('');
   const [isRecording, setIsRecording] = useState(false);
   const recognitionRef = useRef<any>(null);
 
   const incident = incidentData.find(inc => inc.id === selectedIncident);
+
+  // Extract moderator data from correct location (event.moderator_result or top-level fallback)
+  const moderatorResult = incident?.event?.moderator_result || incident?.moderator_result;
+  const moderatorTimestamp = incident?.event?.moderator_timestamp || incident?.moderator_timestamp;
+  const incidentType = incident?.event?.type || incident?.type;
 
   const handleSubmit = async () => {
     if (queryText.trim()) {
@@ -161,40 +291,49 @@ function MainContent({ selectedIncident, incidentData, onClose, onStatusChange, 
                 Date: {new Date(incident.date).toLocaleString()}
               </span>
               <span className={`px-2 py-1 rounded-sm text-xs font-semibold ${
-                incident.type === 'Incident Report' ? 'bg-red-500 text-white' : 'bg-cyan-500 text-white'
+                incidentType === 'Incident Report' ? 'bg-red-500 text-white' : 'bg-cyan-500 text-white'
               }`}>
-                Type: {incident.type}
+                Type: {incidentType}
               </span>
             </div>
           </div>
           <div className='flex-1 min-h-0 space-y-2 flex flex-col'>
-            <div className='bg-white p-3 rounded border border-pink-300 flex-shrink-0' style={{height: '25%'}}>
-              <h4 className='text-sm font-semibold mb-1'>Description</h4>
-              <p className='text-gray-700 text-xs leading-snug text-left'>{incident.description}</p>
+            <div className='bg-white p-3 rounded border border-pink-300 flex-shrink-0 overflow-y-auto' style={{height: '30%'}}>
+              <h4 className='text-sm font-semibold mb-2'>Incident Description</h4>
+              <div className='text-left'>
+                {formatDatadogDescription(incident.description)}
+              </div>
             </div>
-            <div className='bg-white p-3 rounded border border-pink-300 flex-shrink-0' style={{height: '25%'}}>
-              <h4 className='text-sm font-semibold mb-1'>Incident Details</h4>
+            <div className='bg-white p-3 rounded border border-pink-300 flex-shrink-0' style={{height: '12%'}}>
+              <h4 className='text-sm font-semibold mb-1'>Incident Metadata</h4>
               <div className='flex gap-4 text-left'>
                 <div>
                   <p className='font-semibold text-gray-600 text-xs'>Incident ID:</p>
                   <p className='text-gray-800 text-xs'>#{incident.id}</p>
                 </div>
                 <div>
-                  <p className='font-semibold text-gray-600 text-xs'>Created:</p>
+                  <p className='font-semibold text-gray-600 text-xs'>Created Date:</p>
                   <p className='text-gray-800 text-xs'>{new Date(incident.date).toLocaleDateString()}</p>
                 </div>
                 <div>
-                  <p className='font-semibold text-gray-600 text-xs'>Time:</p>
+                  <p className='font-semibold text-gray-600 text-xs'>Created Time:</p>
                   <p className='text-gray-800 text-xs'>{new Date(incident.date).toLocaleTimeString()}</p>
                 </div>
                 <div>
-                  <p className='font-semibold text-gray-600 text-xs'>Priority:</p>
+                  <p className='font-semibold text-gray-600 text-xs'>Priority Level:</p>
                   <p className='text-gray-800 text-xs'>{incident.status === 'Active' ? 'High' : incident.status === 'New' ? 'Medium' : 'Low'}</p>
                 </div>
               </div>
             </div>
             <div className='flex-1 min-h-0'>
-              <ChatPanel key={incident.id} incidentId={incident.id.toString()} title={`Chat: ${incident.title}`} />
+              <ChatPanel 
+                key={incident.id} 
+                incidentId={incident.id.toString()} 
+                title={`Chat: ${incident.title}`}
+                incidentType={incidentType}
+                moderatorResult={moderatorResult}
+                moderatorTimestamp={moderatorTimestamp}
+              />
             </div>
           </div>
         </>

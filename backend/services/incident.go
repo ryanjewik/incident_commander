@@ -65,12 +65,23 @@ func (s *IncidentService) GetIncident(ctx context.Context, incidentID, organizat
 		return nil, fmt.Errorf("access denied")
 	}
 
+	// Migrate top-level moderator fields into event object for frontend compatibility
+	data := doc.Data()
+	if incident.Event == nil {
+		incident.Event = make(map[string]interface{})
+	}
+	if moderatorResult, ok := data["moderator_result"].(map[string]interface{}); ok {
+		incident.Event["moderator_result"] = moderatorResult
+	}
+	if moderatorTimestamp, ok := data["moderator_timestamp"].(string); ok {
+		incident.Event["moderator_timestamp"] = moderatorTimestamp
+	}
+
 	return &incident, nil
 }
 
 func (s *IncidentService) GetIncidentsByOrganization(ctx context.Context, organizationID string) ([]*models.Incident, error) {
-	// Query without OrderBy to avoid requiring a composite index
-	// We'll sort in memory instead
+	// Query incidents for the specified organization
 	iter := s.firebaseService.Firestore.Collection("incidents").
 		Where("organization_id", "==", organizationID).
 		Documents(ctx)
@@ -143,10 +154,25 @@ func (s *IncidentService) GetIncidentsByOrganization(ctx context.Context, organi
 			incident.Metadata = v
 		}
 
+		// Extract event object if present (contains moderator_result, etc.)
+		if eventData, ok := data["event"].(map[string]interface{}); ok {
+			incident.Event = eventData
+		} else {
+			incident.Event = make(map[string]interface{})
+		}
+
+		// Migrate top-level moderator fields into event object for frontend compatibility
+		if moderatorResult, ok := data["moderator_result"].(map[string]interface{}); ok {
+			incident.Event["moderator_result"] = moderatorResult
+		}
+		if moderatorTimestamp, ok := data["moderator_timestamp"].(string); ok {
+			incident.Event["moderator_timestamp"] = moderatorTimestamp
+		}
+
 		incidents = append(incidents, incident)
 	}
 
-	// Sort in memory by date descending
+	// Sort incidents by date in descending order
 	sort.Slice(incidents, func(i, j int) bool {
 		timeI, errI := time.Parse(time.RFC3339, incidents[i].Date)
 		timeJ, errJ := time.Parse(time.RFC3339, incidents[j].Date)
