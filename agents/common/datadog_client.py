@@ -127,6 +127,11 @@ def aggregate_logs(
         try:
             r.raise_for_status()
         except requests.HTTPError:
+            try:
+                if r.status_code == 403:
+                    print(f"[datadog_client] aggregate HTTPError 403 body={r.text}")
+            except Exception:
+                pass
             raise
         return r.json()
     try:
