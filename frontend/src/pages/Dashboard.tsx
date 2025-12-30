@@ -3,7 +3,7 @@ import { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import MainContent from '../components/MainContent';
 import IncidentList from '../components/IncidentList';
-import MetricsCards from '../components/dashboard_dummies/MetricsCards';
+// top cards replaced by PerformanceMetrics
 import IncidentTimeline from '../components/dashboard_dummies/IncidentTimeline';
 import SystemHealth from '../components/dashboard_dummies/SystemHealth';
 import RecentLogs from '../components/dashboard_dummies/RecentLogs';
@@ -39,11 +39,32 @@ export default function Dashboard() {
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [incidentData, setIncidentData] = useState<Incident[]>([]);
   const [loadingIncidents, setLoadingIncidents] = useState(false);
+  const [ddConfigured, setDdConfigured] = useState<boolean>(false);
 
   useEffect(() => {
     if (userData?.organization_id) {
       loadUserOrganizations();
       loadIncidents();
+      // Check if Datadog is configured for this org
+      let mounted = true;
+      // default to false (not configured) until we get a successful response
+      setDdConfigured(false);
+      apiService.getDatadogOverview(userData.organization_id).then((res:any) => {
+        if (!mounted) return;
+        // Inspect payload: if it contains any of the expected sections treat as configured
+        const hasMetrics = Array.isArray(res?.metrics) && res.metrics.length > 0;
+        const hasMonitors = Array.isArray(res?.monitors) && res.monitors.length > 0;
+        const hasLogs = Array.isArray(res?.recent_logs) && res.recent_logs.length > 0;
+        const hasAny = hasMetrics || hasMonitors || hasLogs || (res && Object.keys(res).length > 0 && (res.metrics || res.monitors || res.recent_logs));
+        console.debug('[Dashboard] Datadog overview response:', res, 'configured:', hasAny);
+        setDdConfigured(Boolean(hasAny));
+      }).catch((err:any) => {
+        if (!mounted) return;
+        console.debug('[Dashboard] Datadog overview error:', err?.response?.status, err?.message);
+        // any error => treat as not configured
+        setDdConfigured(false);
+      });
+      return () => { mounted = false; };
     }
   }, [userData?.organization_id]);
 
@@ -118,7 +139,7 @@ export default function Dashboard() {
 
   return (
     <>
-      <div className="bg-gradient-to-r from-purple-200 to-pink-200 w-screen h-16 flex items-center justify-between px-6 fixed top-0 left-0 right-0 z-10 border-b border-purple-300 shadow-sm">
+      <div className="bg-gradient-to-r from-pink-400 to-purple-700 w-screen h-16 flex items-center justify-between px-6 fixed top-0 left-0 right-0 z-10 border-b border-purple-300 shadow-sm">
         <div className="flex items-center gap-3">
           <h2 className="text-xl md:text-2xl font-semibold text-purple-700">
             Incident Command Center
@@ -135,10 +156,10 @@ export default function Dashboard() {
               value={userData?.organization_id || ''}
               onChange={(e) => handleSwitchOrganization(e.target.value)}
               disabled={switchingOrg || loadingOrgs}
-              className="bg-transparent text-white px-2 py-1.5 text-sm rounded-md hover:bg-purple-100 hover:text-purple-700 font-medium border border-purple-300 focus:outline-none focus:ring-2 focus:ring-purple-300 disabled:opacity-50 transition-colors"
+              className="bg-gradient-to-br from-pink-500 to-purple-700 text-white px-2 py-1.5 text-sm rounded-md font-medium border-none focus:outline-none focus:ring-2 focus:ring-purple-300 disabled:opacity-60 transition-colors"
             >
               {userOrganizations.map((org) => (
-                <option key={org.id} value={org.id}>
+                <option key={org.id} value={org.id} className="text-black">
                   {org.name}
                 </option>
               ))}
@@ -146,25 +167,25 @@ export default function Dashboard() {
           )}
           <button
             onClick={() => setShowDashboard(!showDashboard)}
-            className="bg-transparent text-purple-700 px-3 py-1.5 text-sm rounded-md hover:bg-purple-100 font-medium transition-colors"
+            className="bg-purple-700 text-white px-3 py-1.5 text-sm rounded-md hover:bg-purple-800 font-medium transition-colors"
           >
             {showDashboard ? 'Incidents' : 'Dashboard'}
           </button>
           <button
             onClick={() => setShowOrgsModal(true)}
-            className="bg-transparent text-pink-700 px-3 py-1.5 text-sm rounded-md hover:bg-pink-100 font-medium transition-colors"
+            className="bg-purple-700 text-white px-3 py-1.5 text-sm rounded-md hover:bg-purple-800 font-medium transition-colors"
           >
             Organizations
           </button>
           <div className="relative">
             <button
               onClick={() => setShowProfileMenu(!showProfileMenu)}
-              className="flex items-center gap-2 bg-transparent text-purple-700 px-2 py-1.5 rounded-md hover:bg-purple-100 transition-colors"
+              className="flex items-center gap-2 bg-purple-700 text-white px-2 py-1.5 rounded-md hover:bg-purple-800 transition-colors"
             >
-              <div className="w-8 h-8 rounded-full bg-gradient-to-br from-purple-300 to-pink-300 flex items-center justify-center">
-                <User size={18} className="text-purple-700" />
+              <div className="w-8 h-8 rounded-full bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center">
+                <User size={18} className="text-white" />
               </div>
-              <ChevronDown size={16} className="hidden md:block" />
+              <ChevronDown size={16} className="hidden md:block text-white" />
             </button>
             {showProfileMenu && (
               <div className="absolute right-0 mt-2 w-48 bg-white rounded-md shadow-lg border border-purple-200 py-1">
@@ -176,15 +197,15 @@ export default function Dashboard() {
                   </p>
                   <p className="text-xs text-gray-500">{userData?.email}</p>
                 </div>
-                <button
-                  onClick={() => {
-                    signOut();
-                    setShowProfileMenu(false);
-                  }}
-                  className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-purple-50 transition-colors"
-                >
-                  Sign Out
-                </button>
+                  <button
+                    onClick={() => {
+                      signOut();
+                      setShowProfileMenu(false);
+                    }}
+                    className="w-full text-left px-4 py-2 text-sm text-white bg-purple-700 hover:bg-purple-800 transition-colors rounded-b-md"
+                  >
+                    Sign Out
+                  </button>
               </div>
             )}
           </div>
@@ -193,21 +214,59 @@ export default function Dashboard() {
       <div className="fixed top-16 left-0 right-0 bottom-0 overflow-hidden">
         {showDashboard ? (
           hasOrganization ? (
-            <div className="bg-gradient-to-br from-purple-50 to-pink-50 h-full w-full p-6 overflow-y-auto">
-              <h2 className="text-3xl font-bold text-purple-700 mb-6">Dashboard Overview</h2>
-              <div className="space-y-6">
-                <MetricsCards />
-                <div className="grid grid-cols-2 gap-6">
-                  <IncidentTimeline />
-                  <StatusDistribution />
+            // If Datadog isn't configured for this org, render the same dashboard layout
+            // but replace each panel with a placeholder instructing admins to add keys.
+            ddConfigured === false ? (
+              <div className="bg-gradient-to-br from-purple-50 to-pink-50 h-full w-full p-6 overflow-y-auto">
+                <h2 className="text-3xl font-bold text-purple-700 mb-6">Dashboard Overview</h2>
+                <div className="space-y-6">
+                  <div className='bg-white p-4 rounded-lg border-4 border-purple-600 shadow-lg'>
+                    <h3 className='text-xl font-bold mb-2 text-purple-700'>Performance Metrics</h3>
+                    <p className='text-gray-600'>Datadog API keys are not configured for this organization. Ask an administrator to add the Datadog API & APP keys in the Admin panel to enable this panel.</p>
+                    <div className='mt-3'>
+                      <button onClick={() => setShowOrgsModal(true)} className='bg-purple-700 text-white px-3 py-1 rounded-md hover:bg-purple-800'>Open Organizations</button>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-6">
+                    <div className='bg-white p-4 rounded-lg border-4 border-purple-600 shadow-lg'>
+                      <h3 className='text-xl font-bold mb-2 text-purple-700'>Incident Timeline (Last 7 Days)</h3>
+                      <p className='text-gray-600'>Datadog keys missing — add keys in Admin to show timeline.</p>
+                    </div>
+                    <div className='bg-white p-4 rounded-lg border-4 border-purple-600 shadow-lg'>
+                      <h3 className='text-xl font-bold mb-2 text-purple-700'>Incident Status Distribution</h3>
+                      <p className='text-gray-600'>Datadog keys missing — add keys in Admin to show status distribution.</p>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-6">
+                    <div className='bg-white p-4 rounded-lg border-4 border-purple-600 shadow-lg'>
+                      <h3 className='text-xl font-bold mb-2 text-purple-700'>System Health</h3>
+                      <p className='text-gray-600'>Datadog keys missing — add keys in Admin to show monitors and health.</p>
+                    </div>
+                    <div className='bg-white p-4 rounded-lg border-4 border-purple-600 shadow-lg'>
+                      <h3 className='text-xl font-bold mb-2 text-purple-700'>Recent Logs</h3>
+                      <p className='text-gray-600'>Datadog keys missing — add keys in Admin to show recent logs and events.</p>
+                    </div>
+                  </div>
                 </div>
-                <div className="grid grid-cols-2 gap-6">
-                  <SystemHealth />
-                  <PerformanceMetrics />
-                </div>
-                <RecentLogs />
               </div>
-            </div>
+            ) : (
+              <div className="bg-gradient-to-br from-purple-50 to-pink-50 h-full w-full p-6 overflow-y-auto">
+                <h2 className="text-3xl font-bold text-purple-700 mb-6">Dashboard Overview</h2>
+                <div className="space-y-6">
+                  <PerformanceMetrics />
+                  <div className="grid grid-cols-2 gap-6">
+                    <IncidentTimeline />
+                    <StatusDistribution />
+                  </div>
+                  <div className="grid grid-cols-2 gap-6">
+                    <SystemHealth />
+                    <RecentLogs />
+                  </div>
+                </div>
+              </div>
+            )
           ) : (
             <div className="bg-gradient-to-br from-purple-50 to-pink-50 h-full w-full p-6 overflow-y-auto">
               <div className="max-w-md">
@@ -215,7 +274,7 @@ export default function Dashboard() {
                 <p className="text-gray-600 mb-6">Your dashboards are organization-scoped. Create or join an organization to unlock incidents, metrics, and logs.</p>
                 <button
                   onClick={() => setShowOrgsModal(true)}
-                  className="bg-yellow-400 text-purple-900 px-4 py-2 rounded-md hover:bg-yellow-300 font-medium"
+                  className="bg-purple-700 text-white px-4 py-2 rounded-md hover:bg-purple-800 font-medium"
                 >
                   Open Organizations
                 </button>
@@ -253,7 +312,7 @@ export default function Dashboard() {
                 <p className="text-gray-600 mb-6">Join or create an organization to view and manage incidents.</p>
                 <button
                   onClick={() => setShowOrgsModal(true)}
-                  className="bg-yellow-400 text-purple-900 px-4 py-2 rounded-md hover:bg-yellow-300 font-medium"
+                  className="bg-purple-700 text-white px-4 py-2 rounded-md hover:bg-purple-800 font-medium"
                 >
                   Open Organizations
                 </button>

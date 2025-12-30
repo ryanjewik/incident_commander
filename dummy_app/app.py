@@ -279,6 +279,11 @@ def startup():
         scheduler.add_job(poll_postgres_stats, "interval", seconds=int(os.environ.get("PG_POLL_INTERVAL", 30)))
     except Exception:
         pass
+    # Schedule system I/O poller to emit disk/network bytes-per-second metrics
+    try:
+        scheduler.add_job(poll_system_io, "interval", seconds=int(os.environ.get("SYSTEM_IO_POLL_INTERVAL", 15)))
+    except Exception:
+        pass
     # Schedule a low-frequency Postgres activity runner (default every 4 hours)
     try:
         scheduler.add_job(simulate_postgres_activity, "interval", seconds=int(os.environ.get("PG_SIM_INTERVAL_SECONDS", 86400)))
@@ -999,6 +1004,22 @@ def simulate_traffic():
                 pass
         except Exception:
             pass
+
+        # Optionally integrate the 'all_new_metrics' bulk emitter into normal traffic.
+        try:
+            if os.environ.get('AUTO_EMIT_ALL_NEW_METRICS', 'false').lower() in ('1', 'true', 'yes'):
+                prob = float(os.environ.get('AUTO_EMIT_ALL_NEW_METRICS_PROBABILITY', '0.1'))
+                if random.random() < prob:
+                    cnt = int(os.environ.get('AUTO_EMIT_ALL_NEW_METRICS_COUNT', '50'))
+                    dly = float(os.environ.get('AUTO_EMIT_ALL_NEW_METRICS_DELAY', '0.01'))
+                    try:
+                        # call the internal endpoint function which starts a background emitter
+                        emit_all_new_metrics(count=cnt, delay=dly)
+                        logger.info('Auto-triggered emit_all_new_metrics count=%s delay=%s', cnt, dly)
+                    except Exception:
+                        logger.exception('Auto emit_all_new_metrics invocation failed')
+        except Exception:
+            pass
         if span_ctx is not None:
             try:
                 span_ctx.finish()
@@ -1006,6 +1027,66 @@ def simulate_traffic():
                 pass
     except Exception:
         logger.exception("simulate_traffic failed")
+
+
+# --- System I/O poller -----------------------------------------------------
+# Emit application-side system disk/network bytes/sec metrics so environments
+# without a host Datadog Agent still have values for `system.disk.*` and
+# `system.net.*` metric queries used by the backend.
+_prev_disk = None
+_prev_net = None
+_prev_io_ts = None
+
+
+def poll_system_io():
+    """Poll psutil io counters and emit per-second gauges for disk and network.
+
+    Emits:
+      - system.disk.read_bytes (bytes/sec)
+      - system.disk.write_bytes (bytes/sec)
+      - system.net.bytes_rcvd (bytes/sec)
+      - system.net.bytes_sent (bytes/sec)
+    """
+    global _prev_disk, _prev_net, _prev_io_ts
+    try:
+        now = time.time()
+        disk = psutil.disk_io_counters()
+        net = psutil.net_io_counters()
+        if disk is None or net is None:
+            return
+        if _prev_disk is None or _prev_net is None or _prev_io_ts is None:
+            _prev_disk = disk
+            _prev_net = net
+            _prev_io_ts = now
+            return
+        dt = now - _prev_io_ts
+        if dt <= 0:
+            return
+        read_delta = max(0, disk.read_bytes - _prev_disk.read_bytes)
+        write_delta = max(0, disk.write_bytes - _prev_disk.write_bytes)
+        recv_delta = max(0, net.bytes_recv - _prev_net.bytes_recv)
+        sent_delta = max(0, net.bytes_sent - _prev_net.bytes_sent)
+
+        read_bps = read_delta / dt
+        write_bps = write_delta / dt
+        recv_bps = recv_delta / dt
+        sent_bps = sent_delta / dt
+
+        # emit as gauges (bytes/sec) — backend queries use rate() but will accept
+        # gauges emitted at sampling intervals as well.
+        try:
+            record_gauge('system.disk.read_bytes', int(read_bps), tags=[f'env:{os.environ.get("DD_ENV","demo")}', f'host:{socket.gethostname()}'])
+            record_gauge('system.disk.write_bytes', int(write_bps), tags=[f'env:{os.environ.get("DD_ENV","demo")}', f'host:{socket.gethostname()}'])
+            record_gauge('system.net.bytes_rcvd', int(recv_bps), tags=[f'env:{os.environ.get("DD_ENV","demo")}', f'host:{socket.gethostname()}'])
+            record_gauge('system.net.bytes_sent', int(sent_bps), tags=[f'env:{os.environ.get("DD_ENV","demo")}', f'host:{socket.gethostname()}'])
+        except Exception:
+            pass
+
+        _prev_disk = disk
+        _prev_net = net
+        _prev_io_ts = now
+    except Exception:
+        logger.exception('poll_system_io failed')
 
 
 def poll_redis_info():
@@ -1397,6 +1478,16 @@ def start_automations():
                             record_gauge('system.cpu.user', 90, tags=[host_tag])
                             record_gauge('system.mem.used', int(psutil.virtual_memory().used * 1.2), tags=[host_tag])
                             record_gauge('system.mem.pct', 85, tags=[host_tag])
+                            # emit synthetic app-scoped IO metrics during the spike
+                            try:
+                                net = psutil.net_io_counters()
+                                disk = psutil.disk_io_counters()
+                                record_gauge('dummy.io.net.bytes_sent', int(net.bytes_sent % 1000000), tags=[env_tag, host_tag, 'service:dummy'])
+                                record_gauge('dummy.io.net.bytes_recv', int(net.bytes_recv % 1000000), tags=[env_tag, host_tag, 'service:dummy'])
+                                record_gauge('dummy.io.disk.read_bytes', int(disk.read_bytes % 1000000), tags=[env_tag, host_tag, 'service:dummy'])
+                                record_gauge('dummy.io.disk.write_bytes', int(disk.write_bytes % 1000000), tags=[env_tag, host_tag, 'service:dummy'])
+                            except Exception:
+                                pass
                             time.sleep(0.3)
                     except Exception:
                         pass
@@ -1551,6 +1642,16 @@ def spike_trigger(types: str = 'gemini,postgres,host', duration: int = None):
                         try:
                             record_gauge('dummy.system.cpu_percent', int(psutil.cpu_percent()), tags=[env_tag])
                             record_gauge('dummy.system.memory_percent', int(psutil.virtual_memory().percent), tags=[env_tag])
+                            # Emit synthetic IO metrics under the app service during manual spike
+                            try:
+                                net = psutil.net_io_counters()
+                                disk = psutil.disk_io_counters()
+                                record_gauge('dummy.io.net.bytes_sent', int(net.bytes_sent % 1000000), tags=[env_tag, f'host:{socket.gethostname()}', 'service:dummy'])
+                                record_gauge('dummy.io.net.bytes_recv', int(net.bytes_recv % 1000000), tags=[env_tag, f'host:{socket.gethostname()}', 'service:dummy'])
+                                record_gauge('dummy.io.disk.read_bytes', int(disk.read_bytes % 1000000), tags=[env_tag, f'host:{socket.gethostname()}', 'service:dummy'])
+                                record_gauge('dummy.io.disk.write_bytes', int(disk.write_bytes % 1000000), tags=[env_tag, f'host:{socket.gethostname()}', 'service:dummy'])
+                            except Exception:
+                                pass
                         except Exception:
                             pass
                         time.sleep(0.01)
@@ -1672,6 +1773,16 @@ def spike_trigger(types: str = 'gemini,postgres,host', duration: int = None):
                     cpu = int(psutil.cpu_percent(interval=None))
                     record_gauge('dummy.system.memory_percent', int(mem), tags=[env_tag])
                     record_gauge('dummy.system.cpu_percent', int(cpu), tags=[env_tag])
+                    # Emit baseline IO under app namespace so service-scoped queries can surface activity
+                    try:
+                        # use small synthetic values to indicate baseline traffic
+                        record_gauge('dummy.io.net.bytes_sent', 0, tags=[env_tag])
+                        record_gauge('dummy.io.net.bytes_recv', 0, tags=[env_tag])
+                        record_gauge('dummy.io.disk.read_bytes', 0, tags=[env_tag])
+                        record_gauge('dummy.io.disk.write_bytes', 0, tags=[env_tag])
+                        record_gauge('dummy.io.disk.usage_percent', int(psutil.disk_usage('/').percent), tags=[env_tag])
+                    except Exception:
+                        pass
                     record_metric('dummy.heartbeat', 1, tags=[env_tag])
                 except Exception:
                     pass
@@ -1687,6 +1798,96 @@ def spike_trigger(types: str = 'gemini,postgres,host', duration: int = None):
             logger.info('Started baseline metrics emitter every %ss', os.environ.get('BASELINE_EMIT_INTERVAL_SECONDS', 15))
         except Exception:
             logger.exception('Failed to start baseline metrics emitter')
+
+    # Optional IO metrics emitter: network and disk I/O (configurable)
+    def emit_io_metrics():
+        interval = int(os.environ.get('IO_METRICS_INTERVAL_SECONDS', 15))
+        env_tag = f"env:{os.environ.get('DD_ENV','demo')}"
+        host_tag = f"host:{socket.gethostname()}"
+        # emit under both host and dummy service so dashboards/monitors can pick them
+        service_tags = ["service:host", "service:dummy"]
+        try:
+            prev_net = psutil.net_io_counters()
+        except Exception:
+            prev_net = None
+        try:
+            prev_disk = psutil.disk_io_counters()
+        except Exception:
+            prev_disk = None
+
+        base_tags = [env_tag, host_tag] + service_tags
+
+        while True:
+            try:
+                # network I/O (bytes) since last sample
+                net = psutil.net_io_counters()
+                if prev_net is not None and net is not None:
+                    sent = max(0, net.bytes_sent - prev_net.bytes_sent)
+                    recv = max(0, net.bytes_recv - prev_net.bytes_recv)
+                    # Emit delta bytes for the interval (bytes)
+                    record_gauge('system.net.bytes_sent', int(sent), tags=base_tags)
+                    record_gauge('system.net.bytes_recv', int(recv), tags=base_tags)
+                    # Also emit under our app-specific namespace so service-scoped
+                    # queries can find them reliably (avoid colliding with built-in system metrics)
+                    record_gauge('dummy.io.net.bytes_sent', int(sent), tags=base_tags)
+                    record_gauge('dummy.io.net.bytes_recv', int(recv), tags=base_tags)
+
+                    # Compute and emit derived rate metrics (bytes/sec, MB/s, Gbps)
+                    try:
+                        interval_secs = max(1.0, float(interval))
+                    except Exception:
+                        interval_secs = 1.0
+                    network_bps = float(sent + recv) / interval_secs
+                    network_gbps = network_bps / 1_000_000_000.0
+                    # disk rates computed below after prev_disk is checked
+                    record_gauge('network_bps', int(network_bps), tags=base_tags)
+                    record_gauge('network_gbps', float(network_gbps), tags=base_tags)
+                    # duplicate under app namespace for service-scoped queries
+                    record_gauge('dummy.io.network_bps', int(network_bps), tags=base_tags)
+                    record_gauge('dummy.io.network_gbps', float(network_gbps), tags=base_tags)
+                prev_net = net
+
+                # disk I/O (bytes) since last sample
+                disk = psutil.disk_io_counters()
+                if prev_disk is not None and disk is not None:
+                    read_b = max(0, disk.read_bytes - prev_disk.read_bytes)
+                    write_b = max(0, disk.write_bytes - prev_disk.write_bytes)
+                    record_gauge('system.disk.read_bytes', int(read_b), tags=base_tags)
+                    record_gauge('system.disk.write_bytes', int(write_b), tags=base_tags)
+                    record_gauge('dummy.io.disk.read_bytes', int(read_b), tags=base_tags)
+                    record_gauge('dummy.io.disk.write_bytes', int(write_b), tags=base_tags)
+
+                    try:
+                        interval_secs = max(1.0, float(interval))
+                    except Exception:
+                        interval_secs = 1.0
+                    disk_bps = float(read_b + write_b) / interval_secs
+                    disk_mb_s = disk_bps / 1_000_000.0
+                    record_gauge('disk_bps', int(disk_bps), tags=base_tags)
+                    record_gauge('disk_mb_s', float(disk_mb_s), tags=base_tags)
+                    # duplicate under app namespace
+                    record_gauge('dummy.io.disk_bps', int(disk_bps), tags=base_tags)
+                    record_gauge('dummy.io.disk_mb_s', float(disk_mb_s), tags=base_tags)
+                prev_disk = disk
+
+                # current disk usage percent for root
+                try:
+                    du = psutil.disk_usage('/')
+                    record_gauge('system.disk.usage_percent', int(du.percent), tags=base_tags)
+                    record_gauge('dummy.io.disk.usage_percent', int(du.percent), tags=base_tags)
+                except Exception:
+                    pass
+            except Exception:
+                logger.exception('emit_io_metrics failed')
+            time.sleep(max(1, interval))
+
+    if os.environ.get('IO_METRICS_ENABLED', 'false').lower() in ('1', 'true', 'yes'):
+        try:
+            io_thr = threading.Thread(target=emit_io_metrics, daemon=True)
+            io_thr.start()
+            logger.info('Started IO metrics emitter every %ss', os.environ.get('IO_METRICS_INTERVAL_SECONDS', 15))
+        except Exception:
+            logger.exception('Failed to start IO metrics emitter')
 
 
 # --- New endpoints: Datadog query + bulk emit + host stress ------------------
@@ -1773,6 +1974,82 @@ def emit_pg_failed(count: int = 200, value: float = 1.0, tags: str = 'service:po
 
     threading.Thread(target=_emit_loop, daemon=True).start()
     return {"emitting": 'dummy.pg.insert.failed', "count": count}
+
+@app.post('/emit/all_new_metrics')
+def emit_all_new_metrics(count: int = 100, delay: float = 0.01):
+    """Bulk emit a curated set of the 'new' metrics we added so dashboards
+    and monitors can pick them up quickly. Runs in a background thread.
+
+    - `count`: how many samples per metric to emit
+    - `delay`: seconds between individual emissions to avoid tight spin
+    """
+    dd_env = os.environ.get('DD_ENV', 'demo')
+    host_tag = f'host:{socket.gethostname()}'
+    env_tag = f'env:{dd_env}'
+
+    metric_definitions = [
+        # Gemini
+        ("dummy.gemini.duration_ms", "g", 25000, ["service:gemini"]),
+        ("dummy.gemini.error", "c", 1, ["service:gemini"]),
+        # Postgres
+        ("dummy.pg.insert.failed", "c", 1, ["service:postgres"]),
+        ("pg.xact_rollback", "g", 1, ["service:postgres"]),
+        ("pg.log_errors", "g", 1, ["service:postgres"]),
+        # IO - app-scoped and system
+        ("dummy.io.net.bytes_sent", "g", 10000, ["service:dummy"]),
+        ("dummy.io.net.bytes_recv", "g", 8000, ["service:dummy"]),
+        ("dummy.io.disk.read_bytes", "g", 5000, ["service:dummy"]),
+        ("dummy.io.disk.write_bytes", "g", 7000, ["service:dummy"]),
+        ("dummy.io.disk.usage_percent", "g", int(psutil.disk_usage('/').percent if psutil else 5), ["service:dummy"]),
+        ("system.net.bytes_sent", "g", 10000, []),
+        ("system.net.bytes_recv", "g", 8000, []),
+        ("system.disk.read_bytes", "g", 5000, []),
+        ("system.disk.write_bytes", "g", 7000, []),
+        # Host/system gauges
+        ("dummy.system.cpu_percent", "g", 90, []),
+        ("dummy.system.memory_percent", "g", 80, []),
+        ("dummy.host.cpu.percent", "c", 95, ["service:host"]),
+        ("dummy.host.mem.percent", "c", 85, ["service:host"]),
+        # Derived IO/rate metrics (also include app-scoped duplicates)
+        ("network_bps", "g", 10000, []),
+        ("network_gbps", "g", 0.00001, []),
+        ("disk_bps", "g", 8000, []),
+        ("disk_mb_s", "g", 0.01, []),
+        ("dummy.io.network_bps", "g", 10000, ["service:dummy"]),
+        ("dummy.io.network_gbps", "g", 0.00001, ["service:dummy"]),
+        ("dummy.io.disk_bps", "g", 8000, ["service:dummy"]),
+        ("dummy.io.disk_mb_s", "g", 0.01, ["service:dummy"]),
+        # Redis
+        ("dummy.redis.op.failed", "c", 1, ["service:redis"]),
+    ]
+
+    def _emit_loop():
+        try:
+            for name, mtype, val, base_tags in metric_definitions:
+                tags = list(base_tags) if base_tags else []
+                # always include env and host for better scoping
+                if not any(t.startswith('env:') for t in tags):
+                    tags.append(env_tag)
+                if not any(t.startswith('host:') for t in tags):
+                    tags.append(host_tag)
+
+                for i in range(int(count)):
+                    try:
+                        if mtype == 'g':
+                            record_gauge(name, float(val), tags=tags)
+                        elif mtype == 'h':
+                            record_histogram(name, float(val), tags=tags)
+                        else:
+                            record_metric(name, float(val), tags=tags)
+                    except Exception:
+                        pass
+                    time.sleep(max(0, float(delay)))
+            logger.info('Completed bulk emit of all_new_metrics x%s delay=%s', count, delay)
+        except Exception:
+            logger.exception('emit_all_new_metrics failed')
+
+    threading.Thread(target=_emit_loop, daemon=True).start()
+    return {"started": True, "metric_types": len(metric_definitions), "count": count}
 
 
 @app.post('/host/stress')

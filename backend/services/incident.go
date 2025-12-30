@@ -85,11 +85,65 @@ func (s *IncidentService) GetIncidentsByOrganization(ctx context.Context, organi
 			return nil, fmt.Errorf("failed to iterate incidents: %w", err)
 		}
 
-		var incident models.Incident
-		if err := doc.DataTo(&incident); err != nil {
-			return nil, fmt.Errorf("failed to parse incident: %w", err)
+		// Defensive parsing: Firestore documents may have slightly different
+		// types for timestamp fields (string vs time.Time). Read the raw
+		// data map and convert fields explicitly to avoid DataTo failures
+		// that cause a 500 response.
+		data := doc.Data()
+
+		incident := &models.Incident{}
+		if v, ok := data["id"].(string); ok {
+			incident.ID = v
+		} else {
+			incident.ID = doc.Ref.ID
 		}
-		incidents = append(incidents, &incident)
+		if v, ok := data["organization_id"].(string); ok {
+			incident.OrganizationID = v
+		}
+		if v, ok := data["alert_id"].(string); ok {
+			incident.AlertID = v
+		}
+		if v, ok := data["title"].(string); ok {
+			incident.Title = v
+		}
+		if v, ok := data["status"].(string); ok {
+			incident.Status = v
+		}
+		if v, ok := data["date"].(string); ok {
+			incident.Date = v
+		}
+		if v, ok := data["type"].(string); ok {
+			incident.Type = v
+		}
+		if v, ok := data["description"].(string); ok {
+			incident.Description = v
+		}
+		if v, ok := data["created_by"].(string); ok {
+			incident.CreatedBy = v
+		}
+
+		// created_at / updated_at may come as time.Time or as a string
+		if v, ok := data["created_at"].(time.Time); ok {
+			incident.CreatedAt = v
+		} else if v, ok := data["created_at"].(string); ok {
+			if t, err := time.Parse(time.RFC3339, v); err == nil {
+				incident.CreatedAt = t
+			}
+		}
+
+		if v, ok := data["updated_at"].(time.Time); ok {
+			incident.UpdatedAt = v
+		} else if v, ok := data["updated_at"].(string); ok {
+			if t, err := time.Parse(time.RFC3339, v); err == nil {
+				incident.UpdatedAt = t
+			}
+		}
+
+		if v, ok := data["metadata"].(map[string]interface{}); ok {
+			incident.Metadata = v
+		}
+
+		incidents = append(incidents, incident)
 	}
 
 	// Sort in memory by date descending
