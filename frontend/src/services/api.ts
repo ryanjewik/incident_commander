@@ -85,6 +85,23 @@ export interface JoinRequest {
   updated_at: string;
 }
 
+export interface ModeratorResult {
+  confidence?: number;
+  incident_summary: string;
+  most_likely_root_cause: string;
+  reasoning: string;
+  severity_guess: string;
+  agent_disagreements?: Array<{
+    agent: string;
+    disagreement: string;
+    confidence: number;
+  }>;
+  do_this_now?: string[];
+  next_60_minutes?: string[];
+  tradeoffs_and_risks?: string[];
+  what_to_monitor?: string[];
+}
+
 export interface Incident {
   id: string;
   organization_id: string;
@@ -97,6 +114,36 @@ export interface Incident {
   created_at: string;
   updated_at: string;
   metadata?: Record<string, any>;
+  moderator_result?: ModeratorResult;
+  moderator_timestamp?: string;
+  // Add event property to match Firebase structure
+  event?: {
+    moderator_result?: ModeratorResult;
+    moderator_timestamp?: string;
+    title?: string;
+    type?: string;
+    date_ms?: number;
+    date_posix_s?: number;
+    id?: string;
+    last_updated_ms?: number;
+    last_updated_posix_s?: number;
+    link?: string;
+    message?: string;
+    snapshot_url?: string;
+    tags?: string[];
+    text_only_message?: string;
+    alert_cycle_key?: string;
+    alert_id?: string;
+    alert_priority?: string;
+    alert_status_summary?: string;
+    alert_title?: string;
+    alert_transition?: string;
+    alert_type?: string;
+    metric?: string;
+    metric_namespace?: string;
+    query?: string;
+    scope?: string;
+  };
 }
 
 export interface CreateIncidentRequest {
