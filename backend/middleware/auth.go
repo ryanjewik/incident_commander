@@ -23,6 +23,9 @@ func AuthMiddleware(userService *services.UserService) gin.HandlerFunc {
 		log.Printf("[Auth] Method: %s, Path: %s", c.Request.Method, c.Request.URL.Path)
 		log.Printf("[Auth] Request ID: %p", c.Request)
 
+		log.Printf("[Auth] ========== NEW REQUEST ==========")
+		log.Printf("[Auth] Method: %s, Path: %s", c.Request.Method, c.Request.URL.Path)
+
 		authHeader := c.GetHeader("Authorization")
 		if authHeader == "" {
 			log.Println("[Auth] Missing authorization header")
@@ -140,6 +143,8 @@ func AuthMiddleware(userService *services.UserService) gin.HandlerFunc {
 
 		log.Printf("[Auth] After c.Next() - Response Status: %d", c.Writer.Status())
 		log.Printf("[Auth] ===== AUTH MIDDLEWARE END =====")
+
+		log.Printf("[Auth] After c.Next() - Response Status: %d", c.Writer.Status())
 	}
 }
 

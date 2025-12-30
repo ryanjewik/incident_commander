@@ -1,0 +1,6 @@
+confluent-kafka
+requests
+google-genai
+Pillow
+firebase-admin
+protobuf
