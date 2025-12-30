@@ -29,14 +29,29 @@ class SecretsClient:
         self.ttl = int(os.getenv("SECRETS_CACHE_TTL", ttl))
         self._cache: Dict[str, Dict] = {}
         self._lock = threading.RLock()
+        
+        if not self.agent_token:
+            print("[secrets_client] WARNING: No authentication token found. Set AGENT_ID_TOKEN or AGENT_AUTH_TOKEN")
 
     def _fetch(self, org_id: str) -> Optional[Dict[str, str]]:
         url = f"{self.backend_url}/internal/orgs/{org_id}/secrets"
         headers = {"Authorization": f"Bearer {self.agent_token}"} if self.agent_token else {}
+        
+        if not self.agent_token:
+            print(f"[secrets_client] ERROR: Cannot fetch secrets for org={org_id} - no authentication token available")
+            return None
+            
         try:
             r = requests.get(url, headers=headers, timeout=5)
             r.raise_for_status()
             return r.json()
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 401:
+                print(f"[secrets_client] authentication failed for org={org_id}: {e}")
+                print(f"[secrets_client] hint: ensure AGENT_ID_TOKEN or AGENT_AUTH_TOKEN is valid")
+            else:
+                print(f"[secrets_client] fetch error for org={org_id}: {e}")
+            return None
         except Exception as e:
             print(f"[secrets_client] fetch error for org={org_id}: {e}")
             return None
@@ -58,10 +73,12 @@ class SecretsClient:
 
         if not _FIREBASE_AVAILABLE:
             print("[secrets_client] firebase_admin not available; cannot mint custom token")
+            print("[secrets_client] hint: install firebase-admin or set AGENT_AUTH_TOKEN directly")
             return None
 
         if not creds_path or not web_api_key:
             print("[secrets_client] missing FIREBASE_CREDENTIALS_PATH or FIREBASE_WEB_API_KEY; cannot mint token")
+            print("[secrets_client] hint: set these environment variables or use AGENT_AUTH_TOKEN")
             return None
 
         try:
@@ -88,9 +105,14 @@ class SecretsClient:
                     now = time.time()
                     self._cache["__agent_id_token__"] = {"value": id_token, "expires_at": now + expires_in - 60}
                     self.agent_token = id_token
+                print("[secrets_client] successfully minted and cached Firebase ID token")
                 return id_token
+            else:
+                print("[secrets_client] failed to obtain ID token from Firebase response")
+                return None
         except Exception as e:
             print(f"[secrets_client] failed to mint/exchange firebase token: {e}")
+            print(f"[secrets_client] hint: check FIREBASE_CREDENTIALS_PATH and FIREBASE_WEB_API_KEY are correct")
             return None
 
     def get_datadog_keys(self, org_id: str) -> Optional[Dict[str, str]]:
@@ -102,11 +124,13 @@ class SecretsClient:
 
         # If we don't have an agent id token, try to mint/exchange one
         if not self.agent_token:
+            print("[secrets_client] attempting to mint Firebase ID token...")
             self._ensure_id_token()
 
         # fetch outside lock
         data = self._fetch(org_id)
         if not data:
+            print(f"[secrets_client] failed to retrieve secrets for org={org_id}")
             return None
         val = {"datadog_api_key": data.get("datadog_api_key"), "datadog_app_key": data.get("datadog_app_key")}
         with self._lock:
