@@ -9,7 +9,7 @@ import (
 	"github.com/ryanjewik/incident_commander/backend/services"
 )
 
-func Register(r *gin.Engine, app *handlers.App, userService *services.UserService, incidentHandler *handlers.IncidentHandler, firebaseService *services.FirebaseService, incidentService *services.IncidentService) {
+func Register(r *gin.Engine, app *handlers.App, userService *services.UserService, incidentHandler *handlers.IncidentHandler, firebaseService *services.FirebaseService, incidentService *services.IncidentService) *handlers.ChatHandler {
 	// Configure CORS
 	r.Use(cors.New(cors.Config{
 		AllowOrigins:     []string{"http://localhost:5173", "http://localhost:3000"},
@@ -30,7 +30,7 @@ func Register(r *gin.Engine, app *handlers.App, userService *services.UserServic
 	authHandler := handlers.NewAuthHandler(userService)
 
 	// Initialize chat handler
-	chatHandler := handlers.NewChatHandler(userService, firebaseService)
+	chatHandler := handlers.NewChatHandler(userService, firebaseService, app.KafkaService)
 	// Initialize datadog poller & handler
 	ddService := services.NewDatadogService(config.Load(), firebaseService)
 	ddHandler := handlers.NewDatadogHandler(ddService)
@@ -142,4 +142,5 @@ func Register(r *gin.Engine, app *handlers.App, userService *services.UserServic
 	{
 		nlQuery.POST("/NL_query", app.NLQuery)
 	}
+	return chatHandler
 }

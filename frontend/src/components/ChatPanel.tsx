@@ -13,9 +13,9 @@ import type { Message } from '../services/api';
 interface ChatPanelProps {
   incidentId?: string;
   title?: string;
-  incidentType?: string;
   moderatorResult?: any;
   moderatorTimestamp?: string;
+  onCreateIncident?: (incidentId: string) => void;
 }
 
 // Pastel color palette for different users
@@ -38,7 +38,7 @@ const getUserColor = (userName: string): string => {
   return pastelColors[hash % pastelColors.length];
 };
 
-function ChatPanel({ incidentId, title, moderatorResult, moderatorTimestamp }: ChatPanelProps) {
+function ChatPanel({ incidentId, title, moderatorResult, moderatorTimestamp, onCreateIncident }: ChatPanelProps) {
   const { userData } = useAuth();
   const [ddConfigured, setDdConfigured] = useState<boolean | null>(null);
   const [queryText, setQueryText] = useState('');
@@ -49,6 +49,8 @@ function ChatPanel({ incidentId, title, moderatorResult, moderatorTimestamp }: C
   const [isLoadingMessages, setIsLoadingMessages] = useState(true);
   const [currentUserName] = useState('You');
   const [showModeratorModal, setShowModeratorModal] = useState(false);
+  const [localModeratorResult, setLocalModeratorResult] = useState<any | null>(null);
+  const [localModeratorTimestamp, setLocalModeratorTimestamp] = useState<string | null>(null);
   const recognitionRef = useRef<any>(null);
   const mountedRef = useRef(true);
   const currentIncidentRef = useRef<string | undefined>(incidentId);
@@ -157,8 +159,52 @@ function ChatPanel({ incidentId, title, moderatorResult, moderatorTimestamp }: C
         // Don't refresh messages on reconnect - WebSocket will deliver any missed messages
       });
 
+      // Listen for generic events (e.g., moderator_decision) so we can update
+      // the UI immediately without requiring a full incident refresh.
+      const unsubscribeEvent = wsManager.onEvent((payload: any) => {
+        try {
+          if (!mountedRef.current) return;
+          if (!payload || typeof payload !== 'object') return;
+
+          if (payload.type === 'moderator_decision') {
+            // Determine incident id from the event or nested chat_message as a fallback
+            const eventIncident = payload.incident_id || '';
+            const nestedChatIncident = payload.chat_message && (payload.chat_message.incident_id || payload.chat_message.incidentId) ? (payload.chat_message.incident_id || payload.chat_message.incidentId) : '';
+            const targetIncident = incidentId || '';
+
+            // If neither matches the currently displayed incident, ignore
+            if (eventIncident !== targetIncident && nestedChatIncident !== targetIncident) {
+              return;
+            }
+
+            // Update local moderator result and timestamp for immediate UI update
+            setLocalModeratorResult(payload.moderator_result || null);
+            setLocalModeratorTimestamp(payload.moderator_timestamp || null);
+
+            // Also insert chat message if provided (prefer nested chat message)
+            const message = payload.chat_message as any;
+            if (message) {
+              // If the top-level incident id was empty or mismatched, but the nested
+              // chat message contains the correct incident id, normalize it here.
+              if (!message.incident_id && payload.incident_id) {
+                message.incident_id = payload.incident_id;
+              }
+
+              setMessages((prev) => {
+                const exists = prev.some(m => m.id === message.id);
+                if (exists) return prev;
+                const updated = [...prev, message];
+                return updated.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+              });
+            }
+          }
+        } catch (e) {
+          console.error('[ChatPanel] onEvent handler error', e);
+        }
+      });
+
       // Return cleanup function
-      return [unsubscribeMessage, unsubscribeConnection];
+      return [unsubscribeMessage, unsubscribeConnection, unsubscribeEvent];
     } catch (error) {
       console.error('[ChatPanel] Failed to connect WebSocket:', error);
       if (mountedRef.current && currentIncidentRef.current === incidentId) {
@@ -195,13 +241,21 @@ function ChatPanel({ incidentId, title, moderatorResult, moderatorTimestamp }: C
       try {
         // If no incidentId, use NL Query endpoint to create incident
         if (!incidentId) {
-          await apiService.nlQuery({
+          const res = await apiService.nlQuery({
             message: queryText,
             incident_data: {}
           });
           setQueryText('');
-          // Optionally refresh messages or redirect to new incident
-          await fetchMessages();
+          // If backend returned an incident id, notify parent to select/open it
+          if (res && res.incident_id) {
+              console.debug('[ChatPanel] NL query created incident', res.incident_id);
+              if (onCreateIncident) {
+                console.debug('[ChatPanel] calling onCreateIncident callback with id', res.incident_id);
+                onCreateIncident(res.incident_id);
+              }
+            // Parent will re-render ChatPanel with new incidentId and fetch messages
+            return;
+          }
         } else {
           // Send via WebSocket if connected, otherwise fall back to HTTP
           if (isConnected) {
@@ -343,27 +397,37 @@ function ChatPanel({ incidentId, title, moderatorResult, moderatorTimestamp }: C
 
             {/* Messages list (for incident chats or general NL query responses) */}
             <div className='space-y-2 mt-4'>
-              {/* Show moderator card first if it's an incident report */}
-              {incidentId && moderatorResult && (
-                <div className='mb-4'>
-                  <div className='flex items-center gap-2 mb-2'>
-                    <span className='font-semibold text-gray-800 text-xs'>Moderator Bot</span>
-                    <span className='text-[10px] text-gray-600'>
-                      {moderatorTimestamp ? new Date(moderatorTimestamp).toLocaleString() : 'N/A'}
-                    </span>
-                  </div>
-                  <ModeratorDecisionCard 
-                    moderatorResult={moderatorResult}
-                    moderatorTimestamp={moderatorTimestamp}
-                    onClick={() => setShowModeratorModal(true)}
-                  />
-                </div>
-              )}
+              {/* Moderator card will be rendered inline where the moderator message appears in the feed */}
 
               {messages.map((msg) => {
                 const isCurrentUser = msg.user_name === currentUserName;
                 const bgColor = isCurrentUser ? 'bg-purple-300' : getUserColor(msg.user_name);
-                
+                // If this is a moderator chat message and we have a structured
+                // `moderatorResult` (from local event or parent prop), render
+                // the formatted card inline instead of the plain text bubble.
+                const isModerator = /moderator/i.test(String(msg.user_name || ''));
+                const displayModeratorResult = localModeratorResult || moderatorResult;
+                const displayModeratorTimestamp = localModeratorTimestamp || moderatorTimestamp;
+                if (isModerator && incidentId && displayModeratorResult) {
+                  return (
+                    <div key={msg.id} className={`flex ${isCurrentUser ? 'justify-end' : 'justify-start'}`}>
+                      <div className='max-w-full w-full'>
+                        <div className='flex items-center gap-2 mb-2'>
+                          <span className='font-semibold text-gray-800 text-xs'>Moderator Bot</span>
+                          <span className='text-[10px] text-gray-600'>
+                            {displayModeratorTimestamp ? new Date(displayModeratorTimestamp).toLocaleString() : 'N/A'}
+                          </span>
+                        </div>
+                        <ModeratorDecisionCard
+                          moderatorResult={displayModeratorResult}
+                          moderatorTimestamp={displayModeratorTimestamp}
+                          onClick={() => setShowModeratorModal(true)}
+                        />
+                      </div>
+                    </div>
+                  );
+                }
+
                 return (
                   <div 
                     key={msg.id} 

@@ -393,10 +393,16 @@ func (h *DatadogWebhookHandler) HandleDatadogWebhook(c *gin.Context) {
 		return
 	}
 	ctx := context.Background()
-	// If eventID is empty, generate a new doc (auto-id)
+	// If eventID is empty, generate a new doc (auto-id) and capture the generated ID
 	var err error
 	if incident.ID == "" {
-		_, _, err = h.firebaseService.Firestore.Collection("incidents").Add(ctx, incident)
+		docRef, _, addErr := h.firebaseService.Firestore.Collection("incidents").Add(ctx, incident)
+		if addErr == nil && docRef != nil {
+			// Store the generated document ID back into the incident so downstream
+			// consumers receive a valid `incident_id` in the published event.
+			incident.ID = docRef.ID
+		}
+		err = addErr
 	} else {
 		_, err = h.firebaseService.Firestore.Collection("incidents").Doc(incident.ID).Set(ctx, incident)
 	}
@@ -462,6 +468,7 @@ func (h *DatadogWebhookHandler) HandleDatadogWebhook(c *gin.Context) {
 		}
 
 		// minimal event schema — keep payload small; include raw payload reference
+		// Include an explicit `agents` list so webhook incidents activate all agents.
 		event := map[string]interface{}{
 			"timestamp":       inc.CreatedAt.Format(time.RFC3339),
 			"incident_id":     inc.ID,
@@ -470,6 +477,9 @@ func (h *DatadogWebhookHandler) HandleDatadogWebhook(c *gin.Context) {
 			"type":            "datadog_webhook",
 			"alert_id":        inc.AlertID,
 			"tags":            tags,
+			// Activate agents for Datadog webhook incidents. Moderator is started
+			// independently and should not be included in the per-message list.
+			"agents": []string{"logs_traces_agent", "metrics_agent", "rca_historical_agent"},
 			// include full webhook payload as the raw reference
 			"raw_payload_ref": raw,
 		}

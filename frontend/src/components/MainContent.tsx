@@ -367,7 +367,7 @@ function MainContent({ selectedIncident, incidentData, onClose, onStatusChange, 
                 key={incident.id} 
                 incidentId={incident.id.toString()} 
                 title={`Chat: ${incident.title}`}
-                incidentType={incidentType}
+                onCreateIncident={onSendIncident}
                 moderatorResult={moderatorResult}
                 moderatorTimestamp={moderatorTimestamp}
               />
@@ -376,7 +376,7 @@ function MainContent({ selectedIncident, incidentData, onClose, onStatusChange, 
         </>
       ) : (
         <div className='h-full'>
-          <ChatPanel key="general" />
+          <ChatPanel key="general" onCreateIncident={onSendIncident} />
         </div>
       )}
     </div>

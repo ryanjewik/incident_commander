@@ -10,6 +10,7 @@ from common.kafka_client import build_kafka_config, ensure_topics, make_consumer
 from common.output_writer import write_agent_artifacts
 from common.gemini_client import build_gemini_client, gemini_json_call
 from common.secrets_client import SecretsClient
+import uuid
 
 
 AGENT_NAME = "rca_historical_agent"
@@ -26,7 +27,9 @@ def utc_now_iso() -> str:
 def publish_json(producer, topic: str, payload: Dict[str, Any]) -> None:
     text = json.dumps(payload)
     try:
-        producer.produce(topic, text.encode("utf-8"))
+        base = payload.get("incident_id") or payload.get("query_id") or payload.get("organization_id") or ""
+        key = f"{base}-{uuid.uuid4().hex}" if base else uuid.uuid4().hex
+        producer.produce(topic, text.encode("utf-8"), key=key.encode("utf-8"))
         producer.flush(10)
     except Exception as e:
         print(f"[producer] publish exception for topic={topic}: {e}")
@@ -191,6 +194,17 @@ def process_incident(raw: Dict[str, Any], producer, gemini, firestore_db, incide
     if not incident_id:
         return
 
+    # Respect per-message agents list: if provided, only run when this agent is included
+    per_incident_agents = raw.get("agents")
+    if per_incident_agents and isinstance(per_incident_agents, list):
+        try:
+            names = [str(x) for x in per_incident_agents if x]
+        except Exception:
+            names = []
+        if AGENT_NAME not in names:
+            print(f"[{AGENT_NAME}] skipping incident_id={incident_id} because not in agents list {names}")
+            return
+
     publish_json(
         producer,
         AGENT_STARTED_TOPIC,
@@ -202,6 +216,152 @@ def process_incident(raw: Dict[str, Any], producer, gemini, firestore_db, incide
             "status": "started",
         },
     )
+
+    # If this is an NL query incident (new or reply), compare with recent 'new_nl_query' incidents' moderator_result
+    if raw.get("type") in ("new_nl_query", "reply_nl_query"):
+        print(f"[{AGENT_NAME}] performing NL-query historical compare for incident={incident_id}")
+        limit = int(os.getenv("RCA_HISTORY_LIMIT", "10"))
+
+        # Attempt to fetch the current incident doc to read alert_id and other metadata
+        try:
+            current_doc = fetch_incident_doc_by_id(firestore_db, incident_id=incident_id, collection=incidents_collection)
+        except Exception as e:
+            print(f"[{AGENT_NAME}] failed to fetch current incident doc: {e}")
+            current_doc = None
+
+        # Helper to extract moderator_result from a Firestore doc dict
+        def _extract_moderator_result(d: Dict[str, Any]):
+            # Look for several possible places/names where moderator decisions
+            # may have been stored. Normalize to a single dict or value.
+            candidates = []
+            if isinstance(d.get("event"), dict):
+                ev = d.get("event")
+                candidates.append(ev.get("moderator_result"))
+                candidates.append(ev.get("moderator_decision"))
+                candidates.append(ev.get("moderator_results"))
+            candidates.append(d.get("moderator_result"))
+            candidates.append(d.get("moderator_decision"))
+            candidates.append(d.get("moderator_results"))
+
+            # Also check nested raw_payload or payload fields commonly used
+            if isinstance(d.get("raw_payload"), dict):
+                rp = d.get("raw_payload")
+                candidates.append(rp.get("moderator_result"))
+                candidates.append(rp.get("moderator_decision"))
+
+            for c in candidates:
+                if c:
+                    return c
+            return None
+
+        history: List[Dict[str, Any]] = []
+
+        # If this is a reply_nl_query, prefer matching by alert_id
+        if raw.get("type") == "reply_nl_query" and current_doc:
+            alert_id = current_doc.get("alert_id")
+            if alert_id:
+                try:
+                    history = fetch_related_incidents_by_alert_id(
+                        firestore_db,
+                        alert_id=str(alert_id),
+                        collection=incidents_collection,
+                        exclude_incident_id=incident_id,
+                        limit=limit,
+                    )
+                    # convert fetched docs to history entries with moderator_result
+                    history = [
+                        {
+                            "incident_id": h.get("incident_id") or h.get("_doc_id"),
+                            "moderator_result": _extract_moderator_result(h),
+                        }
+                        for h in history
+                    ]
+                except Exception as e:
+                    print(f"[{AGENT_NAME}] fetch_related_incidents_by_alert_id failed: {e}")
+
+        # If no alert_id matches (or not reply type), fall back to recent new_nl_query incidents for the org
+        if not history:
+            try:
+                q = (
+                    firestore_db.collection(incidents_collection)
+                    .where("organization_id", "==", org_id)
+                    .where("type", "==", "new_nl_query")
+                    .order_by("created_at", direction="DESCENDING")
+                    .limit(limit + 1)
+                    .stream()
+                )
+                for doc in q:
+                    d = doc.to_dict() or {}
+                    inc_id = d.get("id") or d.get("incident_id") or doc.id
+                    if inc_id == incident_id:
+                        continue
+                    mod = _extract_moderator_result(d)
+                    history.append({"incident_id": inc_id, "moderator_result": mod})
+            except Exception as e:
+                print(f"[{AGENT_NAME}] Firestore org-based ordered query failed, falling back: {e}")
+                # fallback stream scan
+                try:
+                    stream_limit = (limit + 1) * 5
+                    stream_iter = firestore_db.collection(incidents_collection).stream()
+                    fallback_hist = []
+                    for doc in stream_iter:
+                        if len(fallback_hist) >= stream_limit:
+                            break
+                        d = doc.to_dict() or {}
+                        if d.get("organization_id") != org_id:
+                            continue
+                        if d.get("type") != "new_nl_query":
+                            continue
+                        inc_id = d.get("id") or d.get("incident_id") or doc.id
+                        if inc_id == incident_id:
+                            continue
+                        mod = _extract_moderator_result(d)
+                        fallback_hist.append({"incident_id": inc_id, "moderator_result": mod, "created_at": d.get("created_at")})
+
+                    fallback_hist.sort(key=lambda x: x.get("created_at") or "", reverse=True)
+                    history = fallback_hist[:limit]
+                except Exception as e2:
+                    print(f"[{AGENT_NAME}] org-based fallback stream scan also failed: {e2}")
+
+        # At this point history is populated (possibly empty). Evaluate and synthesize
+        if not history:
+            result = {"summary": "No previous matching NL incidents found.", "confidence": 0.2}
+        else:
+            has_mod = any(h.get("moderator_result") for h in history)
+            if not has_mod:
+                result = {"summary": "Previous matching incidents found but they lack moderator_result fields.", "confidence": 0.3, "history_count": len(history)}
+            else:
+                payload = {
+                    "task": "Compare moderator_result cards from recent matching NL queries and surface common signals, differences, and recommended next steps.",
+                    "current_incident_id": incident_id,
+                    "history": [h for h in history if h.get("moderator_result")],
+                    "chat_history": raw.get("raw_payload", {}).get("chat_history", []),
+                }
+                try:
+                    res = gemini_json_call(client=gemini, model=os.getenv("GEMINI_MODEL", "gemini-2.0-flash"), system_instructions=("Return STRICT JSON only: {\"comparison\": \"string\", \"common_signals\": [\"string\"], \"differences\": [\"string\"], \"recommendations\": [\"string\"], \"confidence\": \"number\"}"), payload=payload)
+                    if not isinstance(res, dict):
+                        res = {"comparison": str(res), "confidence": 0}
+                    result = res
+                    if isinstance(result, dict):
+                        result.setdefault("debug", {})
+                        result["debug"]["history_count"] = len(history)
+                except Exception as e:
+                    print(f"[{AGENT_NAME}] Gemini compare failed: {e}")
+                    result = {"summary": "Failed to synthesize historical moderator_results.", "confidence": 0.2}
+
+        final_payload = {
+            "agent": AGENT_NAME,
+            "incident_id": incident_id,
+            "organization_id": org_id,
+            "timestamp": utc_now_iso(),
+            "status": "completed",
+            "result": result,
+        }
+        artifacts = write_agent_artifacts(incident_id=incident_id, agent_name=AGENT_NAME, payload=final_payload)
+        final_payload["artifacts"] = artifacts
+        publish_json(producer, AGENT_RESULT_TOPIC, final_payload)
+        print(f"[{AGENT_NAME}] completed NL-query historical compare for incident_id={incident_id}")
+        return
 
     current_doc = fetch_incident_doc_by_id(
     firestore_db,

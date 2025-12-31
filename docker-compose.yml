@@ -84,10 +84,11 @@ services:
     env_file:
       - .env
     environment:
-      - EXPECTED_AGENTS=logs_traces_agent,rca_historical_agent,metrics_agent
+      # - EXPECTED_AGENTS=logs_traces_agent,rca_historical_agent,metrics_agent
       - CLIENT_PROPERTIES_PATH=/app/common/client.properties
       - FIREBASE_CREDENTIALS_PATH=/app/backend/firebase-service-account.json
       - GOOGLE_APPLICATION_CREDENTIALS=/app/backend/firebase-service-account.json
+      - MODERATOR_REPLAY_SECONDS=60
     restart: unless-stopped
     depends_on:
       - logs_agent
