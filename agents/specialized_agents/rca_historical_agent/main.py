@@ -25,12 +25,16 @@ def utc_now_iso() -> str:
 
 
 def publish_json(producer, topic: str, payload: Dict[str, Any]) -> None:
+    # lightweight produce helper: produce and flush, print result to stdout
     text = json.dumps(payload)
     try:
         base = payload.get("incident_id") or payload.get("query_id") or payload.get("organization_id") or ""
         key = f"{base}-{uuid.uuid4().hex}" if base else uuid.uuid4().hex
         producer.produce(topic, text.encode("utf-8"), key=key.encode("utf-8"))
+        # allow librdkafka to deliver callbacks and flush
+        producer.poll(0)
         producer.flush(10)
+        print(f"[producer] published topic={topic} key={key}")
     except Exception as e:
         print(f"[producer] publish exception for topic={topic}: {e}")
 
@@ -205,6 +209,8 @@ def process_incident(raw: Dict[str, Any], producer, gemini, firestore_db, incide
             print(f"[{AGENT_NAME}] skipping incident_id={incident_id} because not in agents list {names}")
             return
 
+    # announce publishing agent_started (kept as log statement)
+    print(f"[{AGENT_NAME}] publishing agent_started for incident_id={incident_id} org={org_id}")
     publish_json(
         producer,
         AGENT_STARTED_TOPIC,
