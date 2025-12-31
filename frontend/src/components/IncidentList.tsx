@@ -9,7 +9,7 @@ interface IncidentListProps {
   onSeverityChange?: (incidentId: string, newSeverity: string) => void;
 }
 
-function IncidentList({ incidentData, selectedIncident, onSelectIncident, onStatusChange }: IncidentListProps) {
+function IncidentList({ incidentData, selectedIncident, onSelectIncident, onStatusChange, onSeverityChange }: IncidentListProps) {
   const [statusFilter, setStatusFilter] = useState<string>('All');
   const [typeFilter, setTypeFilter] = useState<string>('All');
 
@@ -22,6 +22,23 @@ function IncidentList({ incidentData, selectedIncident, onSelectIncident, onStat
   const handleStatusChange = (e: React.MouseEvent, incidentId: string, newStatus: string) => {
     e.stopPropagation();
     onStatusChange(incidentId, newStatus);
+  };
+
+  const handleSeverityChange = (e: React.MouseEvent, incidentId: string, newSeverity: string) => {
+    e.stopPropagation();
+    if (onSeverityChange) {
+      onSeverityChange(incidentId, newSeverity);
+    }
+  };
+
+  const getSeverityGuess = (incident: Incident): string => {
+    if (incident.severity_guess) {
+      return incident.severity_guess;
+    }
+    if (incident.event?.moderator_result?.severity_guess) {
+      return incident.event.moderator_result.severity_guess;
+    }
+    return '';
   };
 
   return (
@@ -59,57 +76,70 @@ function IncidentList({ incidentData, selectedIncident, onSelectIncident, onStat
       </div>
 
       <div className='flex-1 overflow-y-auto'>
-        {[...filteredIncidents].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).map((incident) => (
-          <div 
-            key={incident.id} 
-            onClick={() => onSelectIncident(incident.id)}
-            className={`mb-1.5 border-2 md:border-3 border-purple-700 p-1 md:p-1.5 hover:bg-purple-200 hover:scale-105 hover:shadow-xl cursor-pointer flex items-start ${
-              selectedIncident === incident.id ? 'bg-purple-300 scale-105' : ''
-            }`}
-          >
-            <div className='bg-purple-500 text-white font-bold rounded-sm h-7 w-7 md:h-8 md:w-8 flex flex-col items-center justify-center mr-1 md:mr-1.5 flex-shrink-0'>
-              <p className='text-[8px] md:text-[9px]'>{['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][parseInt(incident.date.split('-')[1]) - 1]}</p>
-              <p className='text-xs md:text-sm leading-none'>{incident.date.split('T')[0].split('-')[2]}</p>
-            </div>
-            <div className='flex flex-col min-w-0 flex-1'>
-              <strong className="text-[11px] md:text-xs font-semibold truncate">{incident.title}</strong>
-              <div className='flex gap-0.5 mt-0.5 flex-wrap items-center'>
-                <select
-                  value={incident.status}
-                  onChange={(e) => handleStatusChange(e as any, incident.id, e.target.value)}
-                  onClick={(e) => e.stopPropagation()}
-                  className={`px-1 py-0.5 rounded-sm text-[8px] md:text-[9px] font-semibold border border-transparent hover:border-purple-900 focus:outline-none focus:ring-1 focus:ring-purple-900 ${
-                    incident.status === 'Active' ? 'bg-purple-600 text-white' :
-                    incident.status === 'Ignored' ? 'bg-gray-400 text-white' :
-                    incident.status === 'New' ? 'bg-blue-500 text-white' :
-                    incident.status === 'Resolved' ? 'bg-green-500 text-white' : 'bg-gray-300'
-                  }`}
-                >
-                  <option value="New">New</option>
-                  <option value="Active">Active</option>
-                  <option value="Resolved">Resolved</option>
-                  <option value="Ignored">Ignored</option>
-                </select>
-                <span className='px-1 py-0.5 rounded-sm text-[8px] md:text-[9px] font-semibold bg-orange-400 text-white hidden md:inline-block truncate'>
-                  {incident.date}
-                </span>
-                <span className={`px-1 py-0.5 rounded-sm text-[8px] md:text-[9px] font-semibold ${
-                  incident.type === 'Incident Report' ? 'bg-red-500 text-white' : 'bg-cyan-500 text-white'
-                }`}>
-                  {incident.type}
-                </span>
-                <span className={`px-1 py-0.5 rounded-sm text-[8px] md:text-[9px] font-semibold ${
-                  incident.severity_guess === 'critical' ? 'bg-red-800 text-white' :
-                  incident.severity_guess === 'high' ? 'bg-red-600 text-white' :
-                  incident.severity_guess === 'medium' ? 'bg-yellow-500 text-black' :
-                  incident.severity_guess === 'low' ? 'bg-green-500 text-white' : 'bg-gray-200 text-black'
-                }`}>
-                  {incident.severity_guess ? incident.severity_guess.toUpperCase() : 'AUTO'}
-                </span>
+        {[...filteredIncidents].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).map((incident) => {
+          const severityGuess = getSeverityGuess(incident);
+          
+          return (
+            <div 
+              key={incident.id} 
+              onClick={() => onSelectIncident(incident.id)}
+              className={`mb-1.5 border-2 md:border-3 border-purple-700 p-1 md:p-1.5 hover:bg-purple-200 hover:scale-105 hover:shadow-xl cursor-pointer flex items-start ${
+                selectedIncident === incident.id ? 'bg-purple-300 scale-105' : ''
+              }`}
+            >
+              <div className='bg-purple-500 text-white font-bold rounded-sm h-7 w-7 md:h-8 md:w-8 flex flex-col items-center justify-center mr-1 md:mr-1.5 flex-shrink-0'>
+                <p className='text-[8px] md:text-[9px]'>{['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][parseInt(incident.date.split('-')[1]) - 1]}</p>
+                <p className='text-xs md:text-sm leading-none'>{incident.date.split('T')[0].split('-')[2]}</p>
+              </div>
+              <div className='flex flex-col min-w-0 flex-1'>
+                <strong className="text-[11px] md:text-xs font-semibold truncate">{incident.title}</strong>
+                <div className='flex gap-0.5 mt-0.5 flex-wrap items-center'>
+                  <select
+                    value={incident.status}
+                    onChange={(e) => handleStatusChange(e as any, incident.id, e.target.value)}
+                    onClick={(e) => e.stopPropagation()}
+                    className={`px-1 py-0.5 rounded-sm text-[8px] md:text-[9px] font-semibold border border-transparent hover:border-purple-900 focus:outline-none focus:ring-1 focus:ring-purple-900 ${
+                      incident.status === 'Active' ? 'bg-purple-600 text-white' :
+                      incident.status === 'Ignored' ? 'bg-gray-400 text-white' :
+                      incident.status === 'New' ? 'bg-blue-500 text-white' :
+                      incident.status === 'Resolved' ? 'bg-green-500 text-white' : 'bg-gray-300'
+                    }`}
+                  >
+                    <option value="New">New</option>
+                    <option value="Active">Active</option>
+                    <option value="Resolved">Resolved</option>
+                    <option value="Ignored">Ignored</option>
+                  </select>
+                  <span className='px-1 py-0.5 rounded-sm text-[8px] md:text-[9px] font-semibold bg-orange-400 text-white hidden md:inline-block truncate'>
+                    {incident.date}
+                  </span>
+                  <span className={`px-1 py-0.5 rounded-sm text-[8px] md:text-[9px] font-semibold ${
+                    incident.type === 'Incident Report' ? 'bg-red-500 text-white' : 'bg-cyan-500 text-white'
+                  }`}>
+                    {incident.type}
+                  </span>
+                  <select
+                    value={severityGuess}
+                    onChange={(e) => handleSeverityChange(e as any, incident.id, e.target.value)}
+                    onClick={(e) => e.stopPropagation()}
+                    className={`px-1 py-0.5 rounded-sm text-[8px] md:text-[9px] font-semibold border border-transparent hover:border-purple-900 focus:outline-none focus:ring-1 focus:ring-purple-900 ${
+                      severityGuess === 'critical' ? 'bg-red-800 text-white' :
+                      severityGuess === 'high' ? 'bg-red-600 text-white' :
+                      severityGuess === 'medium' ? 'bg-yellow-500 text-black' :
+                      severityGuess === 'low' ? 'bg-green-500 text-white' : 'bg-gray-200 text-black'
+                    }`}
+                  >
+                    <option value="">AUTO</option>
+                    <option value="low">LOW</option>
+                    <option value="medium">MEDIUM</option>
+                    <option value="high">HIGH</option>
+                    <option value="critical">CRITICAL</option>
+                  </select>
+                </div>
               </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
         {filteredIncidents.length === 0 && <p className='text-xs md:text-sm'>No incidents or queries match the selected filters.</p>}
       </div>
     </div>

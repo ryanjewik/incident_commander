@@ -1,4 +1,5 @@
 import ChatPanel from './ChatPanel';
+import ModeratorDecisionCard from './ModeratorDecisionCard';
 import { useState, useRef } from 'react';
 import React from 'react';
 
@@ -157,6 +158,17 @@ function MainContent({ selectedIncident, incidentData, onClose, onStatusChange, 
   const moderatorTimestamp = incident?.event?.moderator_timestamp || incident?.moderator_timestamp;
   const incidentType = incident?.event?.type || incident?.type;
 
+  // Get severity_guess from incident or moderator_result
+  const getSeverityGuess = (): string => {
+    if (incident?.severity_guess) {
+      return incident.severity_guess;
+    }
+    if (moderatorResult?.severity_guess) {
+      return moderatorResult.severity_guess;
+    }
+    return '';
+  };
+
   const handleSubmit = async () => {
     if (queryText.trim()) {
       try {
@@ -292,13 +304,13 @@ function MainContent({ selectedIncident, incidentData, onClose, onStatusChange, 
               <div className='flex items-center gap-2'>
                 <label className='text-xs md:text-sm font-semibold hidden md:block'>Severity</label>
                 <select
-                  value={incident.severity_guess || ''}
+                  value={getSeverityGuess()}
                   onChange={(e) => onSeverityChange && onSeverityChange(incident.id, e.target.value)}
                   className={`px-2 py-1 rounded-sm text-xs md:text-sm font-semibold border border-transparent focus:outline-none focus:ring-1 ${
-                    incident.severity_guess === 'critical' ? 'bg-red-700 text-white' :
-                    incident.severity_guess === 'high' ? 'bg-red-500 text-white' :
-                    incident.severity_guess === 'medium' ? 'bg-yellow-500 text-white' :
-                    incident.severity_guess === 'low' ? 'bg-green-500 text-white' : 'bg-gray-200 text-black'
+                    getSeverityGuess() === 'critical' ? 'bg-red-700 text-white' :
+                    getSeverityGuess() === 'high' ? 'bg-red-500 text-white' :
+                    getSeverityGuess() === 'medium' ? 'bg-yellow-500 text-white' :
+                    getSeverityGuess() === 'low' ? 'bg-green-500 text-white' : 'bg-gray-200 text-black'
                   }`}
                 >
                   <option value="">Auto</option>
@@ -319,6 +331,14 @@ function MainContent({ selectedIncident, incidentData, onClose, onStatusChange, 
             </div>
           </div>
           <div className='flex-1 min-h-0 space-y-2 flex flex-col'>
+            {incident.moderator_result && (
+              <div className='flex-shrink-0'>
+                <ModeratorDecisionCard 
+                  moderatorResult={incident.moderator_result}
+                  moderatorTimestamp={incident.moderator_timestamp}
+                />
+              </div>
+            )}
             <div className='bg-white p-3 rounded border border-pink-300 flex-shrink-0 overflow-y-auto' style={{height: '30%'}}>
               <h4 className='text-sm font-semibold mb-2'>Incident Description</h4>
               <div className='text-left'>
@@ -339,10 +359,6 @@ function MainContent({ selectedIncident, incidentData, onClose, onStatusChange, 
                 <div>
                   <p className='font-semibold text-gray-600 text-xs'>Created Time:</p>
                   <p className='text-gray-800 text-xs'>{new Date(incident.date).toLocaleTimeString()}</p>
-                </div>
-                <div>
-                  <p className='font-semibold text-gray-600 text-xs'>Priority Level:</p>
-                  <p className='text-gray-800 text-xs'>{incident.status === 'Active' ? 'High' : incident.status === 'New' ? 'Medium' : 'Low'}</p>
                 </div>
               </div>
             </div>
