@@ -114,7 +114,6 @@ func (s *IncidentService) GetIncident(ctx context.Context, incidentID, organizat
 	}
 
 	// Migrate top-level moderator fields into event object for frontend compatibility
-	data := doc.Data()
 	if incident.Event == nil {
 		incident.Event = make(map[string]interface{})
 	}
@@ -125,7 +124,7 @@ func (s *IncidentService) GetIncident(ctx context.Context, incidentID, organizat
 		incident.Event["moderator_timestamp"] = moderatorTimestamp
 	}
 
-	return &incident, nil
+	return incident, nil
 }
 
 func (s *IncidentService) GetIncidentsByOrganization(ctx context.Context, organizationID string) ([]*models.Incident, error) {

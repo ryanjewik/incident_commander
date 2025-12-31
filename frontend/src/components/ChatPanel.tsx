@@ -38,7 +38,7 @@ const getUserColor = (userName: string): string => {
   return pastelColors[hash % pastelColors.length];
 };
 
-function ChatPanel({ incidentId, title, incidentType, moderatorResult, moderatorTimestamp }: ChatPanelProps) {
+function ChatPanel({ incidentId, title, moderatorResult, moderatorTimestamp }: ChatPanelProps) {
   const { userData } = useAuth();
   const [ddConfigured, setDdConfigured] = useState<boolean | null>(null);
   const [queryText, setQueryText] = useState('');

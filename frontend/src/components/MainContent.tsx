@@ -145,7 +145,7 @@ function formatDatadogDescription(description: string): React.ReactElement {
   );
 }
 
-function MainContent({ selectedIncident, incidentData, onClose, onStatusChange, onSendIncident }: DashboardSectionProps) {
+function MainContent({ selectedIncident, incidentData, onClose, onStatusChange, onSendIncident, onSeverityChange }: DashboardSectionProps) {
   const [queryText, setQueryText] = useState('');
   const [isRecording, setIsRecording] = useState(false);
   const recognitionRef = useRef<any>(null);
