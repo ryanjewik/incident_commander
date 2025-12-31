@@ -70,8 +70,13 @@ services:
       com.datadoghq.ad.check_names: '["postgres"]'
       com.datadoghq.ad.init_configs: '[{}]'
       # Auto-discovery instance with credentials so the agent can authenticate
-      com.datadoghq.ad.instances: '[{"host":"%%host%%","port":"5432","username":"dummy","password":"dummypw","dbname":"dummydb","tags":["service:postgres","env:demo"]}]'
+      com.datadoghq.ad.instances: '[{"host":"postgres","port":"5432","username":"dummy","password":"dummypw","dbname":"dummydb","tags":["service:postgres","env:demo"]}]'
       com.datadoghq.logs: '[{"source":"postgres","service":"postgres","tags":["env:demo"]}]'
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dummy -d dummydb -h 127.0.0.1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   datadog:
     image: datadog/agent:latest
@@ -81,6 +86,7 @@ services:
       - DD_SITE=${DD_SITE}
       - DD_APM_ENABLED=true
       - DD_LOGS_ENABLED=true
+      # Prefer collecting logs from all containers so incidents can discover logs even when labels are missing
       - DD_LOGS_CONFIG_CONTAINER_COLLECT_ALL=true
       - DD_DOGSTATSD_NON_LOCAL_TRAFFIC=true
       - DD_DOGSTATSD_METRICS_STATS_ENABLE=true
@@ -89,6 +95,8 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - datadog-socket:/var/run/datadog
+      # Persist agent logs on the host for easier diagnostics
+      - ./docker/datadog/logs:/var/log/datadog:rw
       - /proc/:/host/proc/:ro
       - /sys/fs/cgroup/:/host/sys/fs/cgroup:ro
       # Mount Postgres data so the agent can tail server logs
@@ -100,6 +108,8 @@ services:
       - "8126:8126"     # APM trace intake
     networks:
       - dd_net
+    depends_on:
+      - postgres
 
 networks:
   dd_net:

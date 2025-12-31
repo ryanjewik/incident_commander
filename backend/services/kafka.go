@@ -108,6 +108,24 @@ func (k *KafkaService) PublishMessage(ctx context.Context, topic string, message
 	return nil
 }
 
+// PublishMessageWithKey publishes a message with an explicit key.
+func (k *KafkaService) PublishMessageWithKey(ctx context.Context, topic string, message string, key string) error {
+	err := k.producer.Produce(&kafka.Message{
+		TopicPartition: kafka.TopicPartition{Topic: &topic, Partition: kafka.PartitionAny},
+		Value:          []byte(message),
+		Key:            []byte(key),
+	}, nil)
+
+	if err != nil {
+		return fmt.Errorf("failed to produce message: %w", err)
+	}
+
+	// Wait for message to be delivered
+	k.producer.Flush(5000)
+
+	return nil
+}
+
 func (k *KafkaService) ReadAgentResponse(ctx context.Context, topic string, queryID string, timeout time.Duration) (*AgentResponse, error) {
 	err := k.consumer.Subscribe(topic, nil)
 	if err != nil {

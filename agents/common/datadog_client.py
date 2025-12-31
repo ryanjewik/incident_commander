@@ -243,9 +243,11 @@ def query_timeseries(
     to_ms: int,
 ) -> Dict[str, Any]:
     url = f"{_dd_api_base(dd_site)}/api/v1/query"
+    # Datadog v1/query expects Unix timestamps in seconds, not milliseconds.
+    # Convert provided millisecond timestamps to seconds to avoid server-side errors.
     params = {
-        "from": from_ms,
-        "to": to_ms,
+        "from": int(from_ms / 1000) if isinstance(from_ms, (int, float)) else from_ms,
+        "to": int(to_ms / 1000) if isinstance(to_ms, (int, float)) else to_ms,
         "query": query,
     }
     attempts = 0
@@ -349,3 +351,36 @@ def download_snapshot_image(snapshot_url: str) -> Optional[bytes]:
     if "image" not in ct:
         return r.content
     return r.content
+
+
+def list_metrics(
+    *,
+    dd_site: str,
+    dd_api_key: str,
+    dd_app_key: str,
+    query: str,
+    from_ms: int,
+    to_ms: int,
+    limit: int = 50,
+) -> List[str]:
+    """Call Datadog /api/v1/metrics to discover metric names that match `query`.
+    Requires a time window (`from_ms`/`to_ms`) and returns a list of metric names (strings)."""
+    url = f"{_dd_api_base(dd_site)}/api/v1/metrics"
+    # API expects seconds for 'from'/'to'
+    params = {"query": query, "from": int(from_ms / 1000), "to": int(to_ms / 1000)}
+    try:
+        r = requests.get(url, headers=_headers(dd_api_key, dd_app_key), params=params, timeout=30)
+        if r.status_code == 429:
+            print(f"[datadog_client] list_metrics rate-limited (429)")
+            return []
+        r.raise_for_status()
+        data = r.json()
+        metrics = data.get("metrics", []) if isinstance(data, dict) else []
+        return metrics[:limit]
+    except Exception as e:
+        print(f"[datadog_client] list_metrics error: {e}")
+        try:
+            print(getattr(r, "text", ""))
+        except Exception:
+            pass
+        return []

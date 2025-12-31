@@ -2,12 +2,14 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"log"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
 
+	"cloud.google.com/go/firestore"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
@@ -19,16 +21,18 @@ import (
 type ChatHandler struct {
 	userService     *services.UserService
 	firebaseService *services.FirebaseService
+	kafkaService    *services.KafkaService
 	upgrader        websocket.Upgrader
 	connections     map[string]map[*websocket.Conn]bool // organizationID -> connections
 	userConnections map[string]*websocket.Conn          // userID -> connection (one per user)
 	connMutex       sync.RWMutex
 }
 
-func NewChatHandler(userService *services.UserService, firebaseService *services.FirebaseService) *ChatHandler {
+func NewChatHandler(userService *services.UserService, firebaseService *services.FirebaseService, kafkaService *services.KafkaService) *ChatHandler {
 	return &ChatHandler{
 		userService:     userService,
 		firebaseService: firebaseService,
+		kafkaService:    kafkaService,
 		upgrader: websocket.Upgrader{
 			ReadBufferSize:  1024,
 			WriteBufferSize: 1024,
@@ -282,6 +286,57 @@ func (h *ChatHandler) HandleWebSocket(c *gin.Context) {
 		}
 
 		h.broadcastMessage(user.OrganizationID, message)
+
+		// If message mentions the assistant and references an incident, create reply_nl_query
+		if message.MentionsBot && message.IncidentID != "" {
+			intent, agents := services.IntentRouter(message.Text, message.IncidentID)
+
+			// Fetch chat history for the incident
+			msgsIter := h.firebaseService.Firestore.Collection("messages").Where("incident_id", "==", message.IncidentID).OrderBy("created_at", firestore.Asc).Documents(ctx)
+			var chatHistory []map[string]interface{}
+			for {
+				doc, err := msgsIter.Next()
+				if err == iterator.Done {
+					break
+				}
+				if err != nil {
+					log.Printf("[WebSocket] Error fetching chat history: %v", err)
+					break
+				}
+				chatHistory = append(chatHistory, doc.Data())
+			}
+
+			incidentPayload := map[string]interface{}{
+				"type":            "reply_nl_query",
+				"organization_id": message.OrganizationID,
+				"incident_id":     message.IncidentID,
+				"created_at":      time.Now(),
+				"intent":          intent,
+				"agents":          agents,
+				"raw_payload": map[string]interface{}{
+					"chat_history":    chatHistory,
+					"trigger_message": message,
+				},
+			}
+
+			if h.kafkaService != nil {
+				data, err := json.Marshal(incidentPayload)
+				if err != nil {
+					log.Printf("[WebSocket] Failed to marshal incident payload: %v", err)
+				} else {
+					// Publish incident-bus with unique key
+					keyIB := message.IncidentID + "-" + uuid.New().String()
+					if err := h.kafkaService.PublishMessageWithKey(ctx, "incident-bus", string(data), keyIB); err != nil {
+						log.Printf("[WebSocket] failed to publish reply_nl_query to incident-bus: %v", err)
+					}
+					// Publish incidents_created with a unique key so multiple replies aren't collapsed by topic compaction/UI
+					key := message.IncidentID + "-" + uuid.New().String()
+					if err := h.kafkaService.PublishMessageWithKey(ctx, "incidents_created", string(data), key); err != nil {
+						log.Printf("[WebSocket] failed to publish reply_nl_query to incidents_created: %v", err)
+					}
+				}
+			}
+		}
 	}
 }
 

@@ -1,0 +1,36 @@
+# Recommended datadog-agent configuration snippets for debugging Tagger/container-ID issues
+# Merge or place relevant sections into your system's datadog.yaml (usually /etc/datadog-agent/datadog.yaml)
+
+log_level: DEBUG
+# Enable internal APM and trace sampling if needed
+apm_config:
+  enabled: true
+
+# Enable container collection settings
+container_collect_all: true
+
+# Tagger / container collector specific settings (example)
+# If using remote tagger, ensure connectivity to remote service is configured
+# and reachable from the agent. Otherwise prefer local tagger.
+# tagger:
+#   use_remote: false
+
+# If your environment uses containerd or CRI sockets different from docker.sock,
+# explicitly set them here (example paths):
+cri:
+  socket: "/run/containerd/containerd.sock"  # or /var/run/docker.sock
+
+# Enable logs collection (global defaults)
+logs_enabled: true
+
+# Example additional tails for classic file-based logs
+logs_config:
+  open_files_limit: 2000
+
+# If you have Kubernetes, you may need to ensure the agent has RBAC
+# and permissions to access Kubelet/cAdvisor API endpoints.
+
+# Debug helpers
+# ddtrace (if installed) can be enabled for richer traces. For Tagger-specific
+# stack traces, enable DEBUG-level logs and capture logs around the reported
+# timestamps.
