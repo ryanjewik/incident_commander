@@ -462,52 +462,10 @@ def collect_agent_results_for_incident(
                 # keep latest per agent
                 got_results[agent] = payload
 
-        # If we didn't collect expected agent results in the live poll window,
-        # do a short replay scan from the beginning of the topic to capture
-        # any agent_started/agent_result messages that were published just
-        # before this ephemeral consumer was created (race conditions).
-        if len(got_results) < len(expected_agents):
-            replay_seconds = int(os.getenv("MODERATOR_REPLAY_SECONDS", "5"))
-            try:
-                replay_group = f"{group}-replay-{int(time.time())}"
-                replay_consumer = make_consumer(kafka_cfg, group_id=replay_group, auto_offset_reset="earliest")
-                replay_consumer.subscribe([AGENT_RESULT_TOPIC, AGENT_STARTED_TOPIC])
-                replay_deadline = time.time() + replay_seconds
-                while time.time() < replay_deadline:
-                    rmsg = replay_consumer.poll(0.5)
-                    if rmsg is None:
-                        continue
-                    if rmsg.error():
-                        continue
-                    try:
-                        rpayload = json.loads(rmsg.value().decode("utf-8"))
-                    except Exception:
-                        continue
-                    if rpayload.get("incident_id") != incident_id:
-                        continue
-                    ragent = rpayload.get("agent")
-                    if not ragent:
-                        continue
-                    if ragent not in expected_agents:
-                        continue
-                    # apply same recency checks
-                    ts_raw = rpayload.get("timestamp")
-                    if ts_raw:
-                        parsed_ts = _parse_iso_ts(str(ts_raw))
-                        if parsed_ts:
-                            now = datetime.now(timezone.utc)
-                            age = (now - parsed_ts).total_seconds()
-                            max_age = int(os.getenv("MAX_AGENT_MESSAGE_AGE_SECONDS", "120"))
-                            max_future = int(os.getenv("MAX_AGENT_FUTURE_SKEW_SECONDS", "60"))
-                            if age > max_age:
-                                continue
-                            if parsed_ts - now > timedelta(seconds=max_future):
-                                continue
-                    # store latest per agent
-                    got_results[ragent] = rpayload
-                replay_consumer.close()
-            except Exception as _e:
-                print(f"[{AGENT_NAME}] replay scan failed: {_e}")
+        # Replay scan removed: we rely on live polling only to gather agent results.
+        # This avoids delays caused by replay logic that can make the moderator
+        # appear to 'start' later than other agents. If needed, a future
+        # implementation may reintroduce a configurable, non-blocking replay.
 
         # Return results in stable expected order (if present)
         out: List[Dict[str, Any]] = []
@@ -566,7 +524,17 @@ def main() -> None:
                 print(f"[{AGENT_NAME}] consumer error: {msg.error()}")
                 continue
 
-            raw = json.loads(msg.value().decode("utf-8"))
+            raw_text = msg.value().decode("utf-8") if msg.value() else ""
+            try:
+                raw = json.loads(raw_text)
+            except Exception as e:
+                print(f"[{AGENT_NAME}] failed to parse incoming message JSON: {e}; raw={raw_text!r}")
+                try:
+                    with open('/tmp/moderator_bad_payloads.log', 'a', encoding='utf-8') as bf:
+                        bf.write(raw_text + '\n')
+                except Exception:
+                    pass
+                continue
             incident_id = raw.get("incident_id", "")
             org_id = raw.get("organization_id", "")
 
@@ -622,6 +590,11 @@ def main() -> None:
             # NOTE: The moderator must be started for EVERY incident_created event regardless
             # of the per-message `agents` list. We only use `per_incident_agents` to decide
             # which other agents' results the moderator should wait for.
+            # Build the per-incident agents list. Default to the environment
+            # provided `expected_agents` but prefer an explicit per-message
+            # `agents` list when present. Always strip out the moderator's
+            # own agent name if it was mistakenly included so the moderator
+            # does not appear as one of the agents it should wait for.
             per_incident_agents = expected_agents
             if raw.get("agents"):
                 try:
@@ -632,6 +605,14 @@ def main() -> None:
                             per_incident_agents = extracted
                 except Exception:
                     pass
+
+            # Defensive: ensure the moderator is never present in the
+            # per-message agents list (it is always started independently).
+            try:
+                if isinstance(per_incident_agents, list):
+                    per_incident_agents = [a for a in per_incident_agents if a != AGENT_NAME]
+            except Exception:
+                pass
 
             # Always start the moderator for any incident. Log when the moderator
             # was not explicitly included in the per-incident agents list to make
