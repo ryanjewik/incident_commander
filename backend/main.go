@@ -32,6 +32,11 @@ func main() {
 	}
 	defer firebaseService.Close()
 
+	// Migration code removed - timestamps are now handled as time.Time directly
+
+	// start moderator decision consumer (if KAFKA_BOOTSTRAP_SERVERS is set)
+	if err := services.StartModeratorConsumer(firebaseService); err != nil {
+		log.Printf("failed to start moderator consumer: %v", err)
 	// start incident-bus listener to persist expected_agents/type for new incidents
 	if err := services.StartIncidentBusListener(firebaseService); err != nil {
 		log.Printf("failed to start incident-bus listener: %v", err)

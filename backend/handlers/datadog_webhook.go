@@ -176,6 +176,19 @@ func (h *DatadogWebhookHandler) HandleDatadogWebhook(c *gin.Context) {
 	// Accept either a shared webhook secret header OR an Authorization bearer token.
 	secretHeader := c.GetHeader("X-Webhook-Secret")
 
+	// Validate the secret value matches expected
+	expectedSecret := os.Getenv("WEBHOOK_SECRET")
+	if expectedSecret == "" {
+		log.Printf("[webhook] WEBHOOK_SECRET environment variable not set")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "server misconfiguration"})
+		return
+	}
+	if secretHeader != expectedSecret {
+		log.Printf("[webhook] invalid webhook secret provided")
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid webhook secret"})
+		return
+	}
+
 	// Optionally check X-Datadog-Source header
 	ddSource := c.GetHeader("X-Datadog-Source")
 	if ddSource == "" {

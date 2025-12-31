@@ -11,6 +11,8 @@ interface ModeratorDecisionCardProps {
 }
 
 function ModeratorDecisionCard({ moderatorResult, moderatorTimestamp, onClick }: ModeratorDecisionCardProps) {
+  const severityGuess = moderatorResult.severity_guess.toLowerCase();
+  
   return (
     <div 
       className={`bg-gradient-to-br from-purple-100 to-pink-100 p-3 rounded-lg border-2 border-purple-400 shadow-md ${onClick ? 'cursor-pointer hover:shadow-lg transition-shadow' : ''}`}
@@ -35,12 +37,12 @@ function ModeratorDecisionCard({ moderatorResult, moderatorTimestamp, onClick }:
         </div>
         <div className='flex gap-2 items-center'>
           <span className={`px-2 py-1 rounded text-[10px] font-semibold ${
-            moderatorResult.severity_guess === 'Critical' ? 'bg-red-500 text-white' :
-            moderatorResult.severity_guess === 'High' ? 'bg-orange-500 text-white' :
-            moderatorResult.severity_guess === 'Medium' ? 'bg-yellow-500 text-white' :
-            'bg-green-500 text-white'
+            severityGuess === 'critical' ? 'bg-red-700 text-white' :
+            severityGuess === 'high' ? 'bg-red-500 text-white' :
+            severityGuess === 'medium' ? 'bg-yellow-500 text-white' :
+            severityGuess === 'low' ? 'bg-green-500 text-white' : 'bg-gray-200 text-black'
           }`}>
-            Severity: {moderatorResult.severity_guess}
+            Recommended Severity: {moderatorResult.severity_guess}
           </span>
           {moderatorResult.confidence !== undefined && (
             <span className='text-[10px] text-gray-600'>
