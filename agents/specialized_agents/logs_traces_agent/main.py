@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict
 import traceback
 import hashlib
+import uuid
 
 from agents.common.kafka_client import build_kafka_config, make_consumer, make_producer, ensure_topics
 from agents.common.datadog_client import (
@@ -31,7 +32,10 @@ def utc_now_iso() -> str:
 
 def publish_json(producer, topic: str, payload: Dict[str, Any]) -> None:
     try:
-        producer.produce(topic, json.dumps(payload).encode("utf-8"))
+        # derive a base key from incident_id or query_id if available
+        base = payload.get("incident_id") or payload.get("query_id") or payload.get("organization_id") or ""
+        key = f"{base}-{uuid.uuid4().hex}" if base else uuid.uuid4().hex
+        producer.produce(topic, json.dumps(payload).encode("utf-8"), key=key.encode("utf-8"))
         producer.flush(10)
         try:
             # lightweight publish log (avoid dumping full payload)
@@ -88,6 +92,17 @@ def process_incident(
         incident_id = raw.get("incident_id", "")
         org_id = raw.get("organization_id", "")
 
+        # Respect per-message agents list: if provided, only run when this agent is included
+        per_incident_agents = raw.get("agents")
+        if per_incident_agents and isinstance(per_incident_agents, list):
+            try:
+                names = [str(x) for x in per_incident_agents if x]
+            except Exception:
+                names = []
+            if AGENT_NAME not in names:
+                print(f"[{AGENT_NAME}] skipping incident_id={incident_id} because not in agents list {names}")
+                return
+
         publish_json(
             producer,
             started_topic,
@@ -100,18 +115,72 @@ def process_incident(
             },
         )
 
+        # Prepare text payload and any explicit time window parsed from URLs/messages
+        # Support both webhook-style `raw_payload_ref.event` and NL reply `raw_payload.trigger_message`
         text_only = raw.get("raw_payload_ref", {}).get("event", {}).get("text_only_message", "") or ""
+        # If reply_nl_query includes trigger_message, prefer that
+        if raw.get("type") == "reply_nl_query":
+            trigger = raw.get("raw_payload", {}).get("trigger_message") or {}
+            # trigger may be a dict of the saved Message; check for text
+            text_only = trigger.get("text") or text_only
         window = parse_related_logs_url_time_window(text_only)
 
+        # Base last_updated_ms from event if available (used as fallback)
         last_updated_ms = int(raw.get("raw_payload_ref", {}).get("event", {}).get("last_updated_ms", "0") or "0")
+
+        # Default time window: prefer explicit URL-parsed window, otherwise derive
+        # a conservative window around last_updated_ms so variables are always defined.
         if window:
-            from_ms, to_ms = window
+            try:
+                from_ms, to_ms = window
+            except Exception:
+                from_ms = max(0, last_updated_ms - 30 * 60 * 1000)
+                to_ms = last_updated_ms + 5 * 60 * 1000
         else:
-            from_ms = max(0, last_updated_ms - 15 * 60 * 1000)
+            from_ms = max(0, last_updated_ms - 30 * 60 * 1000)
             to_ms = last_updated_ms + 5 * 60 * 1000
+
+        # If this is an NL query incident (new or reply), prefer its timestamp to derive the search window
+        if raw.get("type") in ("new_nl_query", "reply_nl_query"):
+            print(f"[{AGENT_NAME}] received {raw.get('type')} incident={incident_id}, deriving timeframe from timestamp")
+            ts_str = raw.get("timestamp") or raw.get("created_at")
+            # If reply, look for trigger_message.created_at
+            if raw.get("type") == "reply_nl_query":
+                trigger = raw.get("raw_payload", {}).get("trigger_message") or {}
+                ts_str = ts_str or trigger.get("created_at") or trigger.get("timestamp")
+
+            if ts_str:
+                try:
+                    dt = datetime.fromisoformat(str(ts_str).replace("Z", "+00:00"))
+                    last_updated_ms = int(dt.timestamp() * 1000)
+                except Exception:
+                    last_updated_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+            else:
+                last_updated_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+
+            # derive search window similar to webhook-driven incidents
+            if window:
+                from_ms, to_ms = window
+            else:
+                # Widen NL-derived default window to ±1 hour to reduce false negatives
+                from_ms = max(0, last_updated_ms - 60 * 60 * 1000)
+                to_ms = last_updated_ms + 60 * 60 * 1000
+
+            print(f"[{AGENT_NAME}] DEBUG: NL-derived time window from_ms={from_ms}, to_ms={to_ms}")
 
         log_query = build_log_query(raw)
         span_query = build_span_query(raw)
+        # Dump raw payload and queries for debugging into the outputs directory
+        try:
+            debug_dir = os.path.join("outputs", str(incident_id))
+            os.makedirs(debug_dir, exist_ok=True)
+            with open(os.path.join(debug_dir, "raw_payload_debug.json"), "w", encoding="utf-8") as df:
+                json.dump(raw, df, indent=2)
+            print(f"[{AGENT_NAME}] wrote raw payload debug to {debug_dir}/raw_payload_debug.json")
+        except Exception as _e:
+            print(f"[{AGENT_NAME}] failed to write raw payload debug: {_e}")
+
+        print(f"[{AGENT_NAME}] DEBUG: built log_query='{log_query}' span_query='{span_query}'")
 
         # Resolve per-organization Datadog keys (backend-decrypted).
         # Do NOT fall back to environment variables for Datadog API/app keys.
@@ -185,14 +254,14 @@ def process_incident(
                 if t.startswith("service:"):
                     svc_val = t.split(":", 1)[1]
 
-            fallback_queries = []
+            # Try a broad empty query first, then progressively narrow by service/env
+            fallback_queries = [""]
             if svc_val and env_val:
                 fallback_queries.append(f"env:{env_val} service:{svc_val}")
             if svc_val:
                 fallback_queries.append(f"service:{svc_val}")
             if env_val:
                 fallback_queries.append(f"env:{env_val}")
-            fallback_queries.append("")
 
             for fq in fallback_queries:
                 try:
@@ -334,6 +403,7 @@ def process_incident(
             "task": "Analyze logs and traces and return a STRICT JSON report.",
             "incident_context": incident_context,
             "logs": logs_for_gemini,
+            "chat_history": raw.get("raw_payload", {}).get("chat_history", []),
         }
         system_instructions = (
             "You are an incident analysis assistant. Return STRICT JSON only with the schema: "

@@ -11,6 +11,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/ryanjewik/incident_commander/backend/models"
+	"github.com/ryanjewik/incident_commander/backend/services"
 )
 
 // NLQueryRequest represents the incoming chat message
@@ -69,7 +70,7 @@ func (a *App) NLQuery(c *gin.Context) {
 		Title:          truncateTitle(req.Message),
 		Status:         "New",
 		Date:           now.Format(time.RFC3339),
-		Type:           "NL Query",
+		Type:           "new_nl_query",
 		Description:    req.Message,
 		CreatedBy:      user.ID,
 		CreatedAt:      now,
@@ -114,24 +115,55 @@ func (a *App) NLQuery(c *gin.Context) {
 	if a.KafkaService == nil {
 		log.Printf("Kafka service not initialized, skipping message publish")
 	} else {
-		// Publish incident to Kafka incident-bus topic
-		// Create the message to publish
+		// Determine intent and which agents to activate for this NL query
+		intent, agents := services.IntentRouter(req.Message, incident.ID)
+
+		// Publish incident to Kafka incident-bus topic including intent and agents list
 		incidentMessage := map[string]interface{}{
 			"message":       req.Message,
 			"incident_id":   incident.ID,
 			"incident_data": req.IncidentData,
+			"intent":        intent,
+			"agents":        agents,
+			"type":          "new_nl_query",
 		}
 
 		messageJSON, err := json.Marshal(incidentMessage)
 		if err != nil {
 			log.Printf("Failed to marshal incident message: %v", err)
 		} else {
-			// Publish to incident-bus topic
-			err = a.KafkaService.PublishMessage(ctx, "incident-bus", string(messageJSON))
+			// Publish to incident-bus topic with unique key
+			keyIB := incident.ID + "-" + uuid.New().String()
+			err = a.KafkaService.PublishMessageWithKey(ctx, "incident-bus", string(messageJSON), keyIB)
 			if err != nil {
-				log.Printf("Failed to publish to Kafka: %v", err)
+				log.Printf("Failed to publish to Kafka (incident-bus): %v", err)
 			} else {
-				log.Printf("Successfully published incident %s to Kafka topic: incident-bus", incident.ID)
+				log.Printf("Successfully published NL query incident %s to Kafka topic: incident-bus (intent=%s agents=%v)", incident.ID, intent, agents)
+			}
+		}
+
+		// Also publish a lightweight Confluent/Incidents-created event for external consumers
+		createdEvent := map[string]interface{}{
+			"timestamp":       incident.CreatedAt.Format(time.RFC3339),
+			"incident_id":     incident.ID,
+			"organization_id": incident.OrganizationID,
+			"title":           incident.Title,
+			"type":            "new_nl_query",
+			"intent":          intent,
+			"agents":          agents,
+			"message":         req.Message,
+			"raw_payload_ref": map[string]interface{}{"event": map[string]interface{}{"message": req.Message}},
+		}
+		b2, err := json.Marshal(createdEvent)
+		if err != nil {
+			log.Printf("Failed to marshal incidents_created event: %v", err)
+		} else {
+			// Publish with a unique key to avoid topic-level compaction/dedup issues
+			key := incident.ID + "-" + uuid.New().String()
+			if err := a.KafkaService.PublishMessageWithKey(ctx, "incidents_created", string(b2), key); err != nil {
+				log.Printf("Failed to publish incidents_created event: %v", err)
+			} else {
+				log.Printf("Published incidents_created event for NL query %s (intent=%s agents=%v)", incident.ID, intent, agents)
 			}
 		}
 	}

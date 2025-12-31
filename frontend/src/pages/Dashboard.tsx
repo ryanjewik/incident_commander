@@ -108,8 +108,10 @@ export default function Dashboard() {
       setLoadingIncidents(true);
       const incidents = await apiService.getIncidents();
       setIncidentData(incidents || []);
+      return incidents || [];
     } catch (error) {
       console.error('Failed to load incidents:', error);
+      return [];
     } finally {
       setLoadingIncidents(false);
     }
@@ -348,6 +350,15 @@ export default function Dashboard() {
                     onClose={() => setSelectedIncident(null)}
                     onStatusChange={handleStatusChange}
                     onSeverityChange={handleSeverityChange}
+                    onSendIncident={async (id: string) => {
+                      console.debug('[Dashboard] onSendIncident called with', id);
+                      setSelectedIncident(id);
+                      // Refresh incident list so the new incident appears in the sidebar
+                      try {
+                        const refreshed = await loadIncidents();
+                        console.debug('[Dashboard] Refreshed incidents, count=', refreshed.length);
+                      } catch (err) { console.error('Failed to refresh incidents after create:', err); }
+                    }}
                   />
                 </>
               )}

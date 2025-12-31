@@ -86,3 +86,4 @@ scripts/
 test.txt
 backend/backend
 agents/**/outputs/*
+docker/datadog/logs/*
