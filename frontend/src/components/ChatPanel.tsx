@@ -190,6 +190,20 @@ function ChatPanel({ incidentId, title, moderatorResult, moderatorTimestamp, onC
                 message.incident_id = payload.incident_id;
               }
 
+              // Attach moderator_result and timestamp directly to this message so
+              // each moderator chat card renders the correct analysis instead of
+              // relying on a single global `localModeratorResult`.
+              try {
+                if (payload.moderator_result) {
+                  message.moderator_result = payload.moderator_result;
+                }
+                if (payload.moderator_timestamp) {
+                  message.moderator_timestamp = payload.moderator_timestamp;
+                }
+              } catch (e) {
+                // ignore
+              }
+
               setMessages((prev) => {
                 const exists = prev.some(m => m.id === message.id);
                 if (exists) return prev;
@@ -405,9 +419,15 @@ function ChatPanel({ incidentId, title, moderatorResult, moderatorTimestamp, onC
                 // If this is a moderator chat message and we have a structured
                 // `moderatorResult` (from local event or parent prop), render
                 // the formatted card inline instead of the plain text bubble.
-                const isModerator = /moderator/i.test(String(msg.user_name || ''));
-                const displayModeratorResult = localModeratorResult || moderatorResult;
-                const displayModeratorTimestamp = localModeratorTimestamp || moderatorTimestamp;
+                // Detect moderator messages: prefer explicit user_id === 'moderator',
+                // fallback to matching Moderator in the user_name for compatibility.
+                const isModerator = ((msg as any).user_id && String((msg as any).user_id) === 'moderator') || /moderator/i.test(String(msg.user_name || ''));
+                // Prefer a moderator_result attached to the individual message first,
+                // then fallback to local live result (from websocket) or the parent prop.
+                const perMsgModeratorResult = (msg as any).moderator_result || (msg as any).moderatorResult || null;
+                const perMsgModeratorTimestamp = (msg as any).moderator_timestamp || (msg as any).moderatorTimestamp || null;
+                const displayModeratorResult = perMsgModeratorResult || localModeratorResult || moderatorResult;
+                const displayModeratorTimestamp = perMsgModeratorTimestamp || localModeratorTimestamp || moderatorTimestamp;
                 if (isModerator && incidentId && displayModeratorResult) {
                   return (
                     <div key={msg.id} className={`flex ${isCurrentUser ? 'justify-end' : 'justify-start'}`}>
@@ -492,10 +512,11 @@ function ChatPanel({ incidentId, title, moderatorResult, moderatorTimestamp, onC
         </div>
       </div>
 
-      {showModeratorModal && moderatorResult && (
+      {/* Use the locally-received moderator result (from websocket) if available when opening modal */}
+      {showModeratorModal && (localModeratorResult || moderatorResult) && (
         <ModeratorDecisionModal
-          moderatorResult={moderatorResult}
-          moderatorTimestamp={moderatorTimestamp}
+          moderatorResult={localModeratorResult || moderatorResult}
+          moderatorTimestamp={localModeratorTimestamp || moderatorTimestamp}
           onClose={() => setShowModeratorModal(false)}
         />
       )}

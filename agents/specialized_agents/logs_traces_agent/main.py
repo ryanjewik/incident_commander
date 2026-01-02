@@ -1,5 +1,6 @@
 from __future__ import annotations
 import json
+import ast
 import os
 import time
 from datetime import datetime, timezone
@@ -550,7 +551,24 @@ def main() -> None:
                 print(f"[{AGENT_NAME}] consumer error: {msg.error()}")
                 continue
 
-            raw = json.loads(msg.value().decode("utf-8"))
+            # Parse message payload as JSON; tolerate and log malformed messages.
+            try:
+                raw = json.loads(msg.value().decode("utf-8"))
+            except json.JSONDecodeError:
+                # Log the raw payload for debugging and attempt a safe Python literal eval
+                s = msg.value().decode("utf-8", errors="replace")
+                print(f"[{AGENT_NAME}] failed to decode JSON from kafka message, raw={s[:1000]}")
+                try:
+                    val = ast.literal_eval(s)
+                    if isinstance(val, dict):
+                        raw = val
+                        print(f"[{AGENT_NAME}] parsed kafka message with ast.literal_eval fallback")
+                    else:
+                        print(f"[{AGENT_NAME}] ast.literal_eval produced non-dict type {type(val)}; skipping message")
+                        continue
+                except Exception as e:
+                    print(f"[{AGENT_NAME}] ast.literal_eval fallback failed: {e}; skipping message")
+                    continue
 
             pending = [f for f in pending if not f.done()]
             while sum(1 for f in pending if not f.done()) >= max_workers * 2:

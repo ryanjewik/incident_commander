@@ -122,6 +122,28 @@ func (s *IncidentService) GetIncident(ctx context.Context, incidentID, organizat
 		incident.Metadata = v
 	}
 
+	// Load moderator_history if present (array of entries)
+	if v, ok := data["moderator_history"].([]interface{}); ok {
+		var hist []map[string]interface{}
+		for _, item := range v {
+			if m, ok2 := item.(map[string]interface{}); ok2 {
+				hist = append(hist, m)
+			}
+		}
+		incident.ModeratorHistory = hist
+	}
+
+	// Load moderator_history if present (array of entries)
+	if v, ok := data["moderator_history"].([]interface{}); ok {
+		var hist []map[string]interface{}
+		for _, item := range v {
+			if m, ok2 := item.(map[string]interface{}); ok2 {
+				hist = append(hist, m)
+			}
+		}
+		incident.ModeratorHistory = hist
+	}
+
 	if incident.OrganizationID != organizationID {
 		log.Printf("[IncidentService] ERROR: Access denied - incident orgID=%s does not match requested orgID=%s", incident.OrganizationID, organizationID)
 		return nil, fmt.Errorf("access denied")

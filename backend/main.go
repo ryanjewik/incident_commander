@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
+	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
 
@@ -17,7 +18,10 @@ import (
 )
 
 func main() {
-	godotenv.Load()
+	// Load environment variables from .env if present
+	if err := godotenv.Load(); err != nil {
+		log.Println("No .env file found, relying on environment variables")
+	}
 
 	cfg := config.Load()
 
@@ -33,11 +37,6 @@ func main() {
 	defer firebaseService.Close()
 
 	// Migration code removed - timestamps are now handled as time.Time directly
-
-	// start incident-bus listener to persist expected_agents/type for new incidents
-	if err := services.StartIncidentBusListener(firebaseService); err != nil {
-		log.Printf("failed to start incident-bus listener: %v", err)
-	}
 
 	userService := services.NewUserService(firebaseService)
 	incidentService := services.NewIncidentService(firebaseService)
@@ -85,6 +84,23 @@ func main() {
 
 	r := gin.New()
 
+	// Add CORS middleware with comprehensive origins list
+	r.Use(cors.New(cors.Config{
+		AllowOrigins: []string{
+			"http://localhost:5173",
+			"http://localhost:3000",
+			"http://34.169.180.116",
+			"http://34.169.180.116:5173",
+			"http://34.169.180.116:8080",
+			"https://incident-commander.duckdns.org",
+			"http://incident-commander.duckdns.org",
+		},
+		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+		AllowHeaders:     []string{"Origin", "Content-Type", "Authorization"},
+		ExposeHeaders:    []string{"Content-Length"},
+		AllowCredentials: true,
+	}))
+
 	// Register routes and get the ChatHandler so we can wire broadcaster callbacks
 	chatHandler := router.Register(r, app, userService, incidentHandler, firebaseService, incidentService)
 
@@ -98,10 +114,11 @@ func main() {
 		log.Printf("failed to start moderator consumer: %v", err)
 	}
 
+	// Start incident-bus listener to persist expected_agents/type for new incidents
 	if err := services.StartIncidentBusListener(firebaseService); err != nil {
 		log.Printf("failed to start incident-bus listener: %v", err)
 	}
 
 	log.Printf("Starting server on port %s", cfg.Port)
-	r.Run(":" + cfg.Port)
+	r.Run("0.0.0.0:" + cfg.Port)
 }

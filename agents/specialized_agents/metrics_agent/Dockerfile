@@ -8,4 +8,5 @@ RUN pip install --no-cache-dir -r agents/specialized_agents/metrics_agent/requir
 
 WORKDIR /app/agents/specialized_agents/metrics_agent
 ENV PYTHONPATH=/app
-CMD ["python", "main.py"]
+ENV PYTHONUNBUFFERED=1
+CMD ["python", "-u", "main.py"]

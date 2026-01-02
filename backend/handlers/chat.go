@@ -37,9 +37,25 @@ func NewChatHandler(userService *services.UserService, firebaseService *services
 			ReadBufferSize:  1024,
 			WriteBufferSize: 1024,
 			CheckOrigin: func(r *http.Request) bool {
-				// Allow connections from localhost during development
 				origin := r.Header.Get("Origin")
-				return origin == "http://localhost:5173" || origin == "http://localhost:3000"
+				// Allow non-browser or same-origin connections when Origin isn't set
+				if origin == "" {
+					return true
+				}
+				// Allow localhost during development
+				if origin == "http://localhost:5173" || origin == "http://localhost:3000" {
+					return true
+				}
+				// Allow same host (production) - check X-Forwarded-Proto for LB-terminated TLS
+				scheme := "http"
+				if r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https" {
+					scheme = "https"
+				}
+				expected := scheme + "://" + r.Host
+				if origin == expected {
+					return true
+				}
+				return false
 			},
 		},
 		connections:     make(map[string]map[*websocket.Conn]bool),
@@ -96,6 +112,59 @@ func (h *ChatHandler) SendMessage(c *gin.Context) {
 		log.Printf("[SendMessage] Failed to save message to Firestore: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save message"})
 		return
+	}
+
+	// Broadcast the message to any connected websocket clients for the organization
+	go h.broadcastMessage(user.OrganizationID, message)
+
+	// If the message mentions the assistant and references an incident, trigger the same
+	// incident workflow as the WebSocket path (publish to Kafka topics).
+	if message.MentionsBot && message.IncidentID != "" {
+		intent, agents := services.IntentRouter(message.Text, message.IncidentID)
+
+		// Fetch chat history for the incident
+		msgsIter := h.firebaseService.Firestore.Collection("messages").Where("incident_id", "==", message.IncidentID).OrderBy("created_at", firestore.Asc).Documents(ctx)
+		var chatHistory []map[string]interface{}
+		for {
+			doc, err := msgsIter.Next()
+			if err == iterator.Done {
+				break
+			}
+			if err != nil {
+				log.Printf("[SendMessage] Error fetching chat history: %v", err)
+				break
+			}
+			chatHistory = append(chatHistory, doc.Data())
+		}
+
+		incidentPayload := map[string]interface{}{
+			"type":            "reply_nl_query",
+			"organization_id": message.OrganizationID,
+			"incident_id":     message.IncidentID,
+			"created_at":      time.Now(),
+			"intent":          intent,
+			"agents":          agents,
+			"raw_payload": map[string]interface{}{
+				"chat_history":    chatHistory,
+				"trigger_message": message,
+			},
+		}
+
+		if h.kafkaService != nil {
+			data, err := json.Marshal(incidentPayload)
+			if err != nil {
+				log.Printf("[SendMessage] Failed to marshal incident payload: %v", err)
+			} else {
+				keyIB := message.IncidentID + "-" + uuid.New().String()
+				if err := h.kafkaService.PublishMessageWithKey(ctx, "incident-bus", string(data), keyIB); err != nil {
+					log.Printf("[SendMessage] failed to publish reply_nl_query to incident-bus: %v", err)
+				}
+				key := message.IncidentID + "-" + uuid.New().String()
+				if err := h.kafkaService.PublishMessageWithKey(ctx, "incidents_created", string(data), key); err != nil {
+					log.Printf("[SendMessage] failed to publish reply_nl_query to incidents_created: %v", err)
+				}
+			}
+		}
 	}
 
 	c.JSON(http.StatusCreated, message)

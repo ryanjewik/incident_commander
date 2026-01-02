@@ -9,7 +9,6 @@ services:
       - "3000:80"
     networks:
       - dd_net
-      
   backend:
     build:
       context: ./backend
@@ -43,6 +42,9 @@ services:
       - CLIENT_PROPERTIES_PATH=/app/common/client.properties
       - FIREBASE_CREDENTIALS_PATH=/app/backend/firebase-service-account.json
       - GOOGLE_APPLICATION_CREDENTIALS=/app/backend/firebase-service-account.json
+      - BACKEND_URL=http://backend:8080
+      - FIREBASE_WEB_API_KEY=${FIREBASE_WEB_API_KEY}
+      - AGENT_ID_UID=${AGENT_ID_UID}
     restart: unless-stopped
     networks:
       - dd_net
@@ -62,10 +64,12 @@ services:
       - CLIENT_PROPERTIES_PATH=/app/common/client.properties
       - FIREBASE_CREDENTIALS_PATH=/app/backend/firebase-service-account.json
       - GOOGLE_APPLICATION_CREDENTIALS=/app/backend/firebase-service-account.json
+      - BACKEND_URL=http://backend:8080
       - DD_MAX_CONCURRENT=1
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - GEMINI_MODEL=${GEMINI_MODEL}
       - FIREBASE_WEB_API_KEY=${FIREBASE_WEB_API_KEY}
+      - AGENT_ID_UID=${AGENT_ID_UID}
     restart: unless-stopped
     depends_on:
       - logs_agent
@@ -88,6 +92,9 @@ services:
       - CLIENT_PROPERTIES_PATH=/app/common/client.properties
       - FIREBASE_CREDENTIALS_PATH=/app/backend/firebase-service-account.json
       - GOOGLE_APPLICATION_CREDENTIALS=/app/backend/firebase-service-account.json
+      - BACKEND_URL=http://backend:8080
+      - FIREBASE_WEB_API_KEY=${FIREBASE_WEB_API_KEY}
+      - AGENT_ID_UID=${AGENT_ID_UID}
       - MODERATOR_REPLAY_SECONDS=60
     restart: unless-stopped
     depends_on:
@@ -111,6 +118,9 @@ services:
       - FIREBASE_CREDENTIALS_PATH=/app/backend/firebase-service-account.json
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - GOOGLE_APPLICATION_CREDENTIALS=/app/backend/firebase-service-account.json
+      - BACKEND_URL=http://backend:8080
+      - FIREBASE_WEB_API_KEY=${FIREBASE_WEB_API_KEY}
+      - AGENT_ID_UID=${AGENT_ID_UID}
     restart: unless-stopped
     depends_on:
       - logs_agent

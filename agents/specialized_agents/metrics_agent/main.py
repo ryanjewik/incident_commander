@@ -1,5 +1,6 @@
 from __future__ import annotations
 import json
+import ast
 import os
 import time
 from datetime import datetime, timezone
@@ -145,6 +146,25 @@ def process_incident(
     secrets_client: SecretsClient | None = None,
 ) -> None:
     try:
+        # helper: ensure result fields are non-null and well-typed before publishing
+        def sanitize_result(res: Any) -> Dict[str, Any]:
+            if not isinstance(res, dict):
+                return {"summary": str(res) if res is not None else "", "analysis": "", "recommendations": []}
+            summary = res.get("summary") if res.get("summary") is not None else ""
+            analysis = res.get("analysis") if res.get("analysis") is not None else ""
+            recs = res.get("recommendations")
+            if recs is None:
+                recs = []
+            elif isinstance(recs, str):
+                recs = [recs]
+            elif not isinstance(recs, list):
+                # try to coerce
+                try:
+                    recs = list(recs)
+                except Exception:
+                    recs = [str(recs)]
+            return {"summary": summary, "analysis": analysis, "recommendations": recs}
+
         def _response_has_series(resp: Any) -> bool:
             try:
                 if not resp:
@@ -486,11 +506,11 @@ def process_incident(
                 "organization_id": org_id,
                 "timestamp": utc_now_iso(),
                 "status": "no_metrics_available",
-                "result": {
+                "result": sanitize_result({
                     "summary": "No metric data available for analysis. This incident may not be metrics-related or lacks proper service/env tags.",
                     "analysis": None,
                     "recommendations": None,
-                },
+                }),
                 "debug": {
                     "monitor_query": monitor_query,
                     "metric_queries": metric_queries,
@@ -501,6 +521,7 @@ def process_incident(
                 },
             }
             
+            print(f"[{AGENT_NAME}] DEBUG: final result (no metrics): {final_payload['result']}")
             artifact_paths = write_agent_artifacts(
                 incident_id=incident_id,
                 agent_name=AGENT_NAME,
@@ -564,6 +585,12 @@ def process_incident(
                     payload=payload,
                 )
             # Ensure result is a dict
+            # Log raw Gemini output for debugging
+            try:
+                print(f"[{AGENT_NAME}] DEBUG: raw gemini_result (type={type(gemini_result)}): {str(gemini_result)[:2000]}")
+            except Exception:
+                pass
+
             if not isinstance(gemini_result, dict):
                 gemini_result = {"summary": str(gemini_result), "analysis": None, "recommendations": None}
             new_key_index = current_key_index
@@ -586,6 +613,25 @@ def process_incident(
             else:
                 # convert to a stable dict form
                 gemini_result = {"summary": json.dumps(gemini_result), "analysis": None, "recommendations": None}
+
+        # If Gemini returned a dict but missing expected keys, coerce into expected schema.
+        # Also capture raw responses under __raw_response__ for debugging.
+        if isinstance(gemini_result, dict):
+            # If the assistant returned a raw response wrapped in __raw_response__, use that as the summary
+            raw_resp = gemini_result.get("__raw_response__")
+            # try to extract expected fields, falling back to raw response or empty string
+            summary = gemini_result.get("summary") if gemini_result.get("summary") is not None else (raw_resp or "")
+            analysis = gemini_result.get("analysis") if gemini_result.get("analysis") is not None else None
+            recommendations = gemini_result.get("recommendations") if gemini_result.get("recommendations") is not None else None
+            # Replace gemini_result with canonical shape
+            gemini_result = {
+                "summary": summary,
+                "analysis": analysis,
+                "recommendations": recommendations,
+            }
+            # Preserve raw response in debug if present
+            if raw_resp:
+                gemini_result["__raw_response__"] = raw_resp
         
         # Update global key index if rotation occurred
         if new_key_index != current_key_index:
@@ -594,13 +640,25 @@ def process_incident(
             print(f"[{AGENT_NAME}] DEBUG: Gemini key rotated from index {current_key_index} to {new_key_index}")
         print(f"[{AGENT_NAME}] DEBUG: Gemini analysis completed")
 
+        # Ensure result fields are non-null to avoid downstream nulls in UI
+        if isinstance(gemini_result, dict):
+            gemini_result["summary"] = gemini_result.get("summary") or ""
+            # Keep analysis as empty string instead of null for clearer presentation
+            gemini_result["analysis"] = gemini_result.get("analysis") or ""
+            # Normalize recommendations to a list
+            recs = gemini_result.get("recommendations")
+            if recs is None:
+                gemini_result["recommendations"] = []
+            elif isinstance(recs, str):
+                gemini_result["recommendations"] = [recs]
+
         final_payload = {
             "agent": AGENT_NAME,
             "incident_id": incident_id,
             "organization_id": org_id,
             "timestamp": utc_now_iso(),
             "status": "completed",
-            "result": gemini_result,
+            "result": sanitize_result(gemini_result),
             "debug": {
                 "monitor_query": monitor_query,
                 "metric_queries": metric_queries,
@@ -612,6 +670,7 @@ def process_incident(
             },
         }
 
+        print(f"[{AGENT_NAME}] DEBUG: final result (completed): {final_payload['result']}")
         artifact_paths = write_agent_artifacts(
             incident_id=incident_id,
             agent_name=AGENT_NAME,
@@ -653,17 +712,16 @@ def main() -> None:
     print(f"[{AGENT_NAME}] DEBUG: dd_site={dd_site}")
 
     # Load multiple Gemini API keys for rotation
+    # Prefer an explicit `GEMINI_API_KEY` (billing-enabled project) first,
+    # then append any numbered keys `GEMINI_API_KEY_1..9` for rotation.
     gemini_keys = []
+    single_key = os.getenv("GEMINI_API_KEY")
+    if single_key:
+        gemini_keys.append(single_key)
     for i in range(1, 10):
         key = os.getenv(f"GEMINI_API_KEY_{i}")
-        if key:
+        if key and key not in gemini_keys:
             gemini_keys.append(key)
-    
-    # Fall back to single key if multi-key not configured
-    if not gemini_keys:
-        single_key = os.getenv("GEMINI_API_KEY")
-        if single_key:
-            gemini_keys.append(single_key)
     
     if not gemini_keys:
         raise RuntimeError("No GEMINI_API_KEY or GEMINI_API_KEY_* environment variables found")
@@ -740,7 +798,23 @@ def main() -> None:
             elapsed_seconds = (datetime.now(timezone.utc) - start_time).total_seconds()
             print(f"[{AGENT_NAME}] DEBUG: Received message #{message_count} (elapsed={elapsed_seconds:.1f}s), offset={msg.offset()}, partition={msg.partition()}")
             
-            raw = json.loads(msg.value().decode("utf-8"))
+            # Parse message payload as JSON; tolerate and log malformed messages.
+            try:
+                raw = json.loads(msg.value().decode("utf-8"))
+            except json.JSONDecodeError:
+                s = msg.value().decode("utf-8", errors="replace")
+                print(f"[{AGENT_NAME}] failed to decode JSON from kafka message, raw={s[:1000]}")
+                try:
+                    val = ast.literal_eval(s)
+                    if isinstance(val, dict):
+                        raw = val
+                        print(f"[{AGENT_NAME}] parsed kafka message with ast.literal_eval fallback")
+                    else:
+                        print(f"[{AGENT_NAME}] ast.literal_eval produced non-dict type {type(val)}; skipping message")
+                        continue
+                except Exception as e:
+                    print(f"[{AGENT_NAME}] ast.literal_eval fallback failed: {e}; skipping message")
+                    continue
 
             # Throttle submission if too many pending tasks
             pending = [f for f in pending if not f.done()]

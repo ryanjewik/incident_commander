@@ -119,6 +119,8 @@ type Incident struct {
 	SeverityGuess  string                 `firestore:"severity_guess,omitempty" json:"severity_guess,omitempty"`
 	Metadata       map[string]interface{} `firestore:"metadata,omitempty" json:"metadata,omitempty"`
 	Event          map[string]interface{} `firestore:"event,omitempty" json:"event"`
+	// Historical moderator analyses appended by backend
+	ModeratorHistory []map[string]interface{} `firestore:"moderator_history,omitempty" json:"moderator_history,omitempty"`
 }
 
 // CreateIncidentRequest is the request body for creating an incident
