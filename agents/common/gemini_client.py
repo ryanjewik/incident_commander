@@ -46,7 +46,7 @@ Provide a detailed analysis of what might have caused this incident.
         )
         return response.text, current_key_index
     except Exception as e:
-        print(f"[gemini_client] Error with key index {current_key_index}: {e}")
+        print(f"[gemini_client] Error with key index {current_key_index}: {e}", flush=True)
         
         # Try next API key if available
         if api_keys and current_key_index < len(api_keys) - 1:
@@ -91,7 +91,7 @@ Provide a detailed analysis of the root cause.
         )
         return response.text, current_key_index
     except Exception as e:
-        print(f"[gemini_client] Error with key index {current_key_index}: {e}")
+        print(f"[gemini_client] Error with key index {current_key_index}: {e}", flush=True)
         
         # Try next API key if available
         if api_keys and current_key_index < len(api_keys) - 1:
@@ -138,20 +138,32 @@ def gemini_json_call(
     else:
         prompt_str = prompt or ""
 
-    response = client.models.generate_content(
-        model=model,
-        contents=prompt_str,
-        config=types.GenerateContentConfig(
-            response_mime_type="application/json"
-        ),
-    )
+    try:
+        response = client.models.generate_content(
+            model=model,
+            contents=prompt_str,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json"
+            ),
+        )
+    except Exception as e:
+        # Log exception details and return them so callers can surface them
+        try:
+            print(f"[gemini_client] generate_content exception: {e}", flush=True)
+        except Exception:
+            pass
+        return {"__raw_response__": None, "__error__": str(e)}
 
     # Try strict JSON parse first. If Gemini returned non-strict JSON
     # (extra commentary, trailing commas, or plain text), attempt to
     # recover by extracting the first JSON object substring. If that
     # still fails, return a wrapper with the raw text so callers can
     # handle it gracefully instead of crashing.
-    text = response.text
+    text = getattr(response, "text", None)
+    if text is None:
+        # Unexpected empty response body
+        return {"__raw_response__": None, "__error__": "empty_response"}
+
     try:
         return json.loads(text)
     except Exception:

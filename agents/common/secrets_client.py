@@ -23,13 +23,21 @@ class SecretsClient:
     """
 
     def __init__(self, backend_url: Optional[str] = None, agent_token: Optional[str] = None, ttl: int = 300):
-        self.backend_url = backend_url or os.getenv("BACKEND_URL", "http://backend:8080")
+        self.backend_url = backend_url or os.getenv("BACKEND_URL", "https://incident-commander.duckdns.org")
         # Prefer a Firebase ID token if available; fall back to legacy AGENT_AUTH_TOKEN
         self.agent_token = agent_token or os.getenv("AGENT_ID_TOKEN") or os.getenv("AGENT_AUTH_TOKEN")
         self.ttl = int(os.getenv("SECRETS_CACHE_TTL", ttl))
         self._cache: Dict[str, Dict] = {}
         self._lock = threading.RLock()
-        
+        # Diagnostic information to help debug token minting failures in different agent containers.
+        try:
+            fb_status = "available" if _FIREBASE_AVAILABLE else "unavailable"
+        except Exception:
+            fb_status = "unknown"
+        creds_present = bool(os.getenv("FIREBASE_CREDENTIALS_PATH") or os.getenv("GOOGLE_APPLICATION_CREDENTIALS"))
+        web_key_present = bool(os.getenv("FIREBASE_WEB_API_KEY"))
+        print(f"[secrets_client] init: firebase={fb_status} creds_present={creds_present} web_key_present={web_key_present} agent_token_set={bool(self.agent_token)} backend_url={self.backend_url}")
+
         if not self.agent_token:
             print("[secrets_client] WARNING: No authentication token found. Set AGENT_ID_TOKEN or AGENT_AUTH_TOKEN")
 
@@ -43,14 +51,37 @@ class SecretsClient:
             
         try:
             r = requests.get(url, headers=headers, timeout=5)
+            # If unauthorized, try to refresh/mint an ID token once and retry
+            if r.status_code == 401:
+                print(f"[secrets_client] received 401 for org={org_id}, attempting to refresh ID token and retry")
+                new_token = self._ensure_id_token()
+                if new_token and new_token != self.agent_token:
+                    headers = {"Authorization": f"Bearer {new_token}"}
+                    try:
+                        r = requests.get(url, headers=headers, timeout=5)
+                    except Exception as _e:
+                        print(f"[secrets_client] retry fetch exception for org={org_id}: {_e}")
+                        return None
+
             r.raise_for_status()
-            return r.json()
+            try:
+                return r.json()
+            except Exception as _e:
+                print(f"[secrets_client] failed to decode JSON response for org={org_id}: {_e}")
+                return None
         except requests.exceptions.HTTPError as e:
-            if e.response.status_code == 401:
-                print(f"[secrets_client] authentication failed for org={org_id}: {e}")
+            code = None
+            body = None
+            try:
+                code = e.response.status_code
+                body = e.response.text
+            except Exception:
+                pass
+            if code == 401:
+                print(f"[secrets_client] authentication failed for org={org_id}: status={code} body={body}")
                 print(f"[secrets_client] hint: ensure AGENT_ID_TOKEN or AGENT_AUTH_TOKEN is valid")
             else:
-                print(f"[secrets_client] fetch error for org={org_id}: {e}")
+                print(f"[secrets_client] fetch error for org={org_id}: status={code} body={body}")
             return None
         except Exception as e:
             print(f"[secrets_client] fetch error for org={org_id}: {e}")

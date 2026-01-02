@@ -331,14 +331,26 @@ function MainContent({ selectedIncident, incidentData, onClose, onStatusChange, 
             </div>
           </div>
           <div className='flex-1 min-h-0 space-y-2 flex flex-col'>
-            {incident.moderator_result && (
+            {/* Render moderator history (if present) in chronological order, fallback to single top-level moderator_result */}
+            {Array.isArray((incident as any).moderator_history) && (incident as any).moderator_history.length > 0 ? (
+              <div className='flex-shrink-0 space-y-2'>
+                {((incident as any).moderator_history as any[]).slice().reverse().map((h, idx) => (
+                  <div key={`mod-history-${idx}`} className='mb-2'>
+                    <ModeratorDecisionCard
+                      moderatorResult={h.result || { incident_summary: '', most_likely_root_cause: '', reasoning: '', severity_guess: '' }}
+                      moderatorTimestamp={h.timestamp}
+                    />
+                  </div>
+                ))}
+              </div>
+            ) : incident.moderator_result ? (
               <div className='flex-shrink-0'>
                 <ModeratorDecisionCard 
                   moderatorResult={incident.moderator_result}
                   moderatorTimestamp={incident.moderator_timestamp}
                 />
               </div>
-            )}
+            ) : null}
             <div className='bg-white p-3 rounded border border-pink-300 flex-shrink-0 overflow-y-auto' style={{height: '30%'}}>
               <h4 className='text-sm font-semibold mb-2'>Incident Description</h4>
               <div className='text-left'>

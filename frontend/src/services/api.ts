@@ -117,6 +117,12 @@ export interface Incident {
   severity_guess?: string;
   moderator_result?: ModeratorResult;
   moderator_timestamp?: string;
+  // Historical moderator analyses appended by backend
+  moderator_history?: Array<{
+    timestamp?: string;
+    agent?: string;
+    result?: ModeratorResult;
+  }>;
   // Add event property to match Firebase structure
   event?: {
     moderator_result?: ModeratorResult;

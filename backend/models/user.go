@@ -54,4 +54,7 @@ type Message struct {
 	MentionsBot    bool      `firestore:"mentions_bot" json:"mentions_bot"`
 	BotResponse    string    `firestore:"bot_response,omitempty" json:"bot_response,omitempty"`
 	CreatedAt      time.Time `firestore:"created_at" json:"created_at"`
+	// Optional moderator analysis attached to this chat message
+	ModeratorResult    map[string]interface{} `firestore:"moderator_result,omitempty" json:"moderator_result,omitempty"`
+	ModeratorTimestamp string                 `firestore:"moderator_timestamp,omitempty" json:"moderator_timestamp,omitempty"`
 }

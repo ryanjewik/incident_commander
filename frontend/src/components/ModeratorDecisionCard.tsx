@@ -11,7 +11,7 @@ interface ModeratorDecisionCardProps {
 }
 
 function ModeratorDecisionCard({ moderatorResult, moderatorTimestamp, onClick }: ModeratorDecisionCardProps) {
-  const severityGuess = moderatorResult.severity_guess.toLowerCase();
+  const severityGuess = (moderatorResult.severity_guess || '').toLowerCase();
   
   return (
     <div 

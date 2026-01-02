@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import ast
 import os
 import time
 from datetime import datetime, timezone
@@ -472,10 +473,24 @@ def main() -> None:
 
         try:
             raw_bytes = msg.value()
-            raw_text = raw_bytes.decode("utf-8") if raw_bytes else ""
-            raw = json.loads(raw_text)
+            raw_text = raw_bytes.decode("utf-8", errors="replace") if raw_bytes else ""
+            try:
+                raw = json.loads(raw_text)
+            except json.JSONDecodeError:
+                print(f"[{AGENT_NAME}] failed to decode JSON from kafka message, raw={raw_text[:1000]}")
+                try:
+                    val = ast.literal_eval(raw_text)
+                    if isinstance(val, dict):
+                        raw = val
+                        print(f"[{AGENT_NAME}] parsed kafka message with ast.literal_eval fallback")
+                    else:
+                        print(f"[{AGENT_NAME}] ast.literal_eval produced non-dict type {type(val)}; skipping message")
+                        continue
+                except Exception as e:
+                    print(f"[{AGENT_NAME}] ast.literal_eval fallback failed: {e}; skipping message")
+                    continue
         except Exception as e:
-            print(f"[{AGENT_NAME}] failed to parse message: {e}")
+            print(f"[{AGENT_NAME}] failed to read message bytes: {e}")
             continue
 
         try:

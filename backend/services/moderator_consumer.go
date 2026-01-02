@@ -130,6 +130,14 @@ func StartModeratorConsumer(firebaseService *FirebaseService, broadcaster func(o
 					{Path: "updated_at", Value: time.Now()},
 				}
 
+				// Append to moderator_history so previous analyses are preserved.
+				historyEntry := map[string]interface{}{
+					"timestamp": parsedTime,
+					"agent":     msg.Agent,
+					"result":    msg.Result,
+				}
+				updates = append(updates, firestore.Update{Path: "moderator_history", Value: firestore.ArrayUnion(historyEntry)})
+
 				// If moderator provided a severity_guess, write it as a top-level field for easier querying
 				if msg.Result != nil {
 					if sgRaw, ok := msg.Result["severity_guess"]; ok {
@@ -169,14 +177,18 @@ func StartModeratorConsumer(firebaseService *FirebaseService, broadcaster func(o
 					ID:             uuid.New().String(),
 					OrganizationID: msg.OrganizationID,
 					IncidentID:     msg.IncidentID,
-					UserID:         "moderator_agent",
-					UserName:       "Moderator Bot",
-					Text:           summaryText,
-					MentionsBot:    false,
-					CreatedAt:      parsedTime,
+					// canonical moderator user id so clients can reliably detect moderator messages
+					UserID:             "moderator",
+					UserName:           "Moderator Bot",
+					Text:               summaryText,
+					MentionsBot:        false,
+					CreatedAt:          parsedTime,
+					ModeratorResult:    msg.Result,
+					ModeratorTimestamp: parsedTime.Format(time.RFC3339),
 				}
 
-				// Persist chat message
+				// Persist chat message including the moderator analysis so clients
+				// retrieving messages get the per-message result directly.
 				msgCtx := context.Background()
 				if _, err := firebaseService.Firestore.Collection("messages").Doc(chatMsg.ID).Set(msgCtx, chatMsg); err != nil {
 					log.Printf("moderator_consumer: failed to write chat message for incident %s: %v", msg.IncidentID, err)
